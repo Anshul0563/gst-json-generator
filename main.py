@@ -1,3 +1,5 @@
+# main.py
+# PORTAL FINAL MAIN
 
 import sys
 from PySide6.QtWidgets import QApplication
@@ -8,7 +10,6 @@ from gst_builder import GSTBuilder
 from parsers import MeeshoParser, FlipkartParser, AmazonParser
 
 
-# =====================================================
 class MergeParser:
 
     def __init__(self):
@@ -19,27 +20,29 @@ class MergeParser:
         ]
 
     def parse_files(self, files):
-        outputs = []
+        results = []
 
-        for parser in self.parsers:
+        for p in self.parsers:
             try:
-                data = parser.parse_files(files)
+                data = p.parse_files(files)
 
-                if data["summary"]["total_taxable"] != 0:
-                    outputs.append(data)
+                if data["summary"]["total_taxable"] > 0:
+                    results.append(data)
 
             except:
                 pass
 
-        if not outputs:
+        if not results:
             raise Exception("No valid marketplace data found")
 
-        return self.merge(outputs)
+        return self.merge(results)
 
     # =====================================================
     def merge(self, arr):
         state_map = {}
-        docs = []
+        invoice_docs = []
+        credit_docs = []
+        debit_docs = []
         clttx = []
 
         total_taxable = 0
@@ -55,7 +58,9 @@ class MergeParser:
             total_cgst += s["total_cgst"]
             total_sgst += s["total_sgst"]
 
-            docs.extend(item.get("invoice_docs", []))
+            invoice_docs.extend(item.get("invoice_docs", []))
+            credit_docs.extend(item.get("credit_docs", []))
+            debit_docs.extend(item.get("debit_docs", []))
 
             clttx.append({
                 "etin": item["etin"],
@@ -84,23 +89,21 @@ class MergeParser:
                 state_map[pos]["cgst"] += r["cgst"]
                 state_map[pos]["sgst"] += r["sgst"]
 
-        rows = list(state_map.values())
-
         return {
-            "platform": "Merged",
             "summary": {
-                "rows": rows,
+                "rows": list(state_map.values()),
                 "total_taxable": round(total_taxable, 2),
                 "total_igst": round(total_igst, 2),
                 "total_cgst": round(total_cgst, 2),
                 "total_sgst": round(total_sgst, 2)
             },
-            "invoice_docs": docs,
+            "invoice_docs": invoice_docs,
+            "credit_docs": credit_docs,
+            "debit_docs": debit_docs,
             "clttx": clttx
         }
 
 
-# =====================================================
 def main():
     setup_logging()
 
@@ -114,6 +117,7 @@ def main():
     }
 
     builder = GSTBuilder()
+
     win = MainWindow(parsers, builder)
     win.show()
 

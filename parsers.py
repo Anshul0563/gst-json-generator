@@ -1,3 +1,5 @@
+# parsers.py
+# PORTAL FINAL VERSION (CORRECT ETIN + CREDIT/DEBIT SUPPORT)
 
 import pandas as pd
 from pathlib import Path
@@ -73,14 +75,6 @@ def make_docs(series):
 def build_summary(df):
     df = df[df["pos"].notna()].copy()
 
-    # remove full zero rows
-    df = df[
-        (df["taxable_value"] != 0) |
-        (df["igst"] != 0) |
-        (df["cgst"] != 0) |
-        (df["sgst"] != 0)
-    ]
-
     if df.empty:
         return {
             "rows": [],
@@ -118,7 +112,8 @@ class MeeshoParser(BaseParser):
 
     def parse_files(self, files):
         frames = []
-        docs = []
+        inv_docs = []
+        cr_docs = []
 
         for file in files:
             try:
@@ -149,18 +144,22 @@ class MeeshoParser(BaseParser):
             frames.append(temp)
 
             if inv:
-                docs.extend(make_docs(df[inv]))
+                inv_docs.extend(make_docs(df[inv]))
+
+            # returns => credit note
+            if "return" in file.lower() and inv:
+                cr_docs.extend(make_docs(df[inv]))
 
         if not frames:
             raise Exception("No valid Meesho files found")
 
-        final = pd.concat(frames, ignore_index=True)
-
         return {
             "platform": "Meesho",
-            "etin": "29AABCM2441G1ZS",
-            "summary": build_summary(final),
-            "invoice_docs": docs
+            "etin": "07AARCM9332R1CQ",
+            "summary": build_summary(pd.concat(frames)),
+            "invoice_docs": inv_docs,
+            "credit_docs": cr_docs,
+            "debit_docs": []
         }
 
 
@@ -169,7 +168,7 @@ class FlipkartParser(BaseParser):
 
     def parse_files(self, files):
         frames = []
-        docs = []
+        inv_docs = []
 
         for file in files:
             try:
@@ -181,10 +180,7 @@ class FlipkartParser(BaseParser):
                 if not any(k in sheet.lower() for k in ["sales", "report", "gstr"]):
                     continue
 
-                try:
-                    df = pd.read_excel(file, sheet_name=sheet)
-                except:
-                    continue
+                df = pd.read_excel(file, sheet_name=sheet)
 
                 df.columns = [
                     str(c).lower().strip()
@@ -199,7 +195,7 @@ class FlipkartParser(BaseParser):
 
                 state_col = next((c for c in cols if "delivery_state" in c), None)
                 taxable = next((c for c in cols if "taxable_value" in c), None)
-                inv = next((c for c in cols if "invoice_id" in c), None)
+                inv = next((c for c in cols if "invoice" in c), None)
 
                 if not state_col or not taxable:
                     continue
@@ -214,18 +210,18 @@ class FlipkartParser(BaseParser):
                 frames.append(temp)
 
                 if inv:
-                    docs.extend(make_docs(df[inv]))
+                    inv_docs.extend(make_docs(df[inv]))
 
         if not frames:
             raise Exception("No valid Flipkart files found")
 
-        final = pd.concat(frames, ignore_index=True)
-
         return {
             "platform": "Flipkart",
-            "etin": "07AAFCN5072P1ZV",
-            "summary": build_summary(final),
-            "invoice_docs": docs
+            "etin": "07AACCF0683K1CU",
+            "summary": build_summary(pd.concat(frames)),
+            "invoice_docs": inv_docs,
+            "credit_docs": [],
+            "debit_docs": []
         }
 
 
@@ -234,7 +230,8 @@ class AmazonParser(BaseParser):
 
     def parse_files(self, files):
         frames = []
-        docs = []
+        inv_docs = []
+        dr_docs = []
 
         for file in files:
             ext = Path(file).suffix.lower()
@@ -274,16 +271,20 @@ class AmazonParser(BaseParser):
             frames.append(temp)
 
             if "invoice_number" in cols:
-                docs.extend(make_docs(df["invoice_number"]))
+                inv_docs.extend(make_docs(df["invoice_number"]))
+
+            # sample style debit note detect
+            if "debit_note_number" in cols:
+                dr_docs.extend(make_docs(df["debit_note_number"]))
 
         if not frames:
             raise Exception("No valid Amazon files found")
 
-        final = pd.concat(frames, ignore_index=True)
-
         return {
             "platform": "Amazon",
             "etin": "07AAICA3918J1CV",
-            "summary": build_summary(final),
-            "invoice_docs": docs
+            "summary": build_summary(pd.concat(frames)),
+            "invoice_docs": inv_docs,
+            "credit_docs": [],
+            "debit_docs": dr_docs
         }
