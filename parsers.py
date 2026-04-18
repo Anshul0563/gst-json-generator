@@ -1,6 +1,6 @@
 """
 parsers.py - PRODUCTION GRADE GST GSTR-1 JSON Generator
-Fixed 2x inflation bug + enterprise-grade deduplication
+Fixed 2x inflation + validation bug
 """
 
 import pandas as pd
@@ -10,35 +10,43 @@ from typing import List, Dict, Any, Optional
 import re
 from collections import defaultdict
 
-# Assuming utils.py exists with these functions - if not, implemented below
-def num(val): return pd.to_numeric(val, errors='coerce').fillna(0)
+# Core utilities
+def num(val): 
+    return pd.to_numeric(val, errors='coerce').fillna(0)
+
 def clean_cols(df): 
-    df.columns = df.columns.str.strip().str.lower().str.replace(r'\s+', '_', regex=True)
+    df.columns = (df.columns.astype(str)
+                  .str.strip()
+                  .str.lower()
+                  .str.replace(r'\s+', '_', regex=True)
+                  .str.replace(r'[^\w_]', '', regex=True))
     return df
+
 def first_match(cols, patterns): 
     for col in cols:
         if any(p in col for p in patterns): 
             return col
     return None
+
 def state_to_code(state):
-    # Simplified state mapping - extend as needed
     state_map = {
         'delhi': '07', 'maharashtra': '27', 'karnataka': '29', 
-        'tamil nadu': '33', 'gujarat': '24', 'rajasthan': '08',
-        'uttar pradesh': '09', 'haryana': '06', 'punjab': '03',
-        'telangana': '36', 'andhra pradesh': '37', 'west bengal': '19'
+        'tamilnadu': '33', 'tamil nadu': '33', 'gujarat': '24', 
+        'rajasthan': '08', 'uttar pradesh': '09', 'haryana': '06',
+        'punjab': '03', 'telangana': '36', 'andhrapradesh': '37', 
+        'andhra pradesh': '37', 'west bengal': '19', 'kerala': '32'
     }
-    return state_map.get(state.lower(), '00')
+    return state_map.get(state.lower().strip(), '00')
 
 def detect_tax_columns(cols):
     return {
-        'igst': first_match(cols, ['igst', 'inter_state', 'ig_st']),
-        'cgst': first_match(cols, ['cgst', 'central_gst', 'cg_st']),
-        'sgst': first_match(cols, ['sgst', 'state_gst', 'sg_st', 'utgst'])
+        'igst': first_match(cols, ['igst', 'inter_state', 'ig_st', 'integrated']),
+        'cgst': first_match(cols, ['cgst', 'central_gst', 'cg_st', 'central']),
+        'sgst': first_match(cols, ['sgst', 'state_gst', 'sg_st', 'utgst', 'state'])
     }
 
 def safe_docs(series):
-    return [str(x) for x in series.dropna().unique() if len(str(x)) > 3]
+    return [str(x) for x in series.dropna().unique() if len(str(x).strip()) > 3]
 
 def calculate_tax_from_taxable(pos, taxable):
     """3% IGST inter-state, 1.5%+1.5% Delhi intra-state"""
@@ -47,50 +55,54 @@ def calculate_tax_from_taxable(pos, taxable):
     sgst = np.where(pos == '07', taxable * 0.015, 0)
     return igst, cgst, sgst
 
-def is_valid_transaction_row(row, required_cols):
-    """Strict transaction row validation"""
-    if pd.isna(row.get('pos')):
+def is_valid_transaction_row(row_series):
+    """Strict transaction row validation - FIXED"""
+    # Check POS validity
+    pos = row_series.get('pos', '')
+    if pd.isna(pos) or pos == '00' or pos == '':
         return False
     
-    taxable = num(row.get('taxable_value', 0))
+    # Check taxable value
+    taxable = num(row_series.get('taxable_value', 0))
     if taxable == 0:
         return False
     
-    # Skip obvious summary patterns
-    text = str(row.get('invoice_no', '') + str(row.get('order_id', ''))).lower()
-    skip_patterns = ['total', 'grand', 'summary', 'subtotal', 'balance']
-    if any(p in text for p in skip_patterns):
+    # Skip summary/total rows
+    skip_text = str(row_series.get('invoice_no', '') + 
+                   str(row_series.get('order_id', ''))).lower()
+    skip_patterns = ['total', 'grand', 'summary', 'subtotal', 'balance', 'nettotal']
+    if any(pattern in skip_text for pattern in skip_patterns):
+        return False
+    
+    # Skip header-like rows
+    if pd.isna(row_series.get('invoice_no')) and pd.isna(row_series.get('order_id')):
         return False
     
     return True
 
 def enterprise_dedupe(df, platform):
-    """Multi-level deduplication with platform prefix"""
+    """Multi-level deduplication"""
     df = df.copy()
     
-    # Prefix invoice/order IDs with platform to prevent cross-platform dupes
+    # Create unique dedupe key with platform prefix
     df['dedupe_key'] = (df['platform'].astype(str) + '_' + 
                        df['invoice_no'].fillna('').astype(str) + '_' +
-                       df['order_id'].fillna('').astype(str))
+                       df['order_id'].fillna('').astype(str) + '_' +
+                       df['pos'].astype(str))
     
-    # Primary dedupe: exact match on key + amounts
+    # Round amounts for dedupe consistency
+    for col in ['taxable_value', 'igst', 'cgst', 'sgst']:
+        df[col] = df[col].round(2)
+    
+    # Primary dedupe: exact match
     primary_cols = ['dedupe_key', 'taxable_value', 'igst', 'cgst', 'sgst']
     df = df.drop_duplicates(subset=primary_cols, keep='first')
-    
-    # Secondary dedupe: same key, closest taxable value (handles minor rounding)
-    def secondary_dedupe(group):
-        if len(group) <= 1:
-            return group
-        # Keep row with smallest absolute taxable value (most granular)
-        return group.loc[group['taxable_value'].abs().idxmin():]
-    
-    df = df.groupby('dedupe_key').apply(secondary_dedupe).reset_index(drop=True)
     
     return df.drop(columns=['dedupe_key'])
 
 
 # =====================================================
-# BASE PARSER - ENHANCED
+# BASE PARSER
 # =====================================================
 class BaseParser:
     def __init__(self):
@@ -101,98 +113,102 @@ class BaseParser:
         self.debit_docs = []
 
     def is_my_file(self, file_path: Path) -> bool:
-        """File type detection"""
         name = file_path.name.lower()
-        return self.platform.lower() in name or self.platform[0].lower() in name
+        return self.platform.lower() in name
 
     def select_transaction_sheet(self, xls: pd.ExcelFile) -> Optional[str]:
-        """Smart sheet selection - skip summary/total sheets"""
-        skip_patterns = ['summary', 'pivot', 'total', 'overview', 'dashboard']
-        priority_patterns = ['sales', 'transaction', 'invoice', 'gstr', 'report']
+        """Smart sheet selection"""
+        skip_patterns = ['summary', 'pivot', 'total', 'overview', 'dashboard', 'sheet']
+        priority_patterns = ['sales', 'transaction', 'invoice', 'gstr', 'report', 'order']
         
+        # Priority sheets first
         for sheet in xls.sheet_names:
             name = sheet.lower()
-            if any(p in name for p in skip_patterns):
-                continue
             if any(p in name for p in priority_patterns):
                 return sheet
         
-        # Fallback to first non-summary sheet
+        # Any non-summary sheet
         for sheet in xls.sheet_names:
             if not any(p in sheet.lower() for p in skip_patterns):
                 return sheet
-        return None
+        
+        return xls.sheet_names[0] if xls.sheet_names else None
 
     def parse_single_file(self, file_path: Path):
-        """Parse single file with strict validation"""
         ext = file_path.suffix.lower()
+        filename = file_path.name.lower()
         
         try:
             if ext == '.csv':
-                df = pd.read_csv(file_path, encoding_errors='ignore')
-            else:  # Excel
+                df = pd.read_csv(file_path, encoding_errors='ignore', low_memory=False)
+            else:
                 xls = pd.ExcelFile(file_path)
                 sheet = self.select_transaction_sheet(xls)
                 if not sheet:
+                    print(f"❌ No valid sheet in {file_path.name}")
                     return
                 df = pd.read_excel(file_path, sheet_name=sheet)
-        except Exception:
+        except Exception as e:
+            print(f"❌ Error reading {file_path.name}: {e}")
             return
 
-        self._process_dataframe(df, file_path.name)
+        print(f"📊 Processing {file_path.name} - {len(df)} rows")
+        self._process_dataframe(df, filename)
 
     def _process_dataframe(self, df: pd.DataFrame, filename: str):
-        """Core processing with strict filtering"""
         raw = clean_cols(df)
         cols = raw.columns.tolist()
         
-        # Critical column detection
-        state_col = first_match(cols, ['delivery_state', 'ship_to_state', 'state', 'place_of_supply'])
-        taxable_col = first_match(cols, ['taxable_value', 'tax_exclusive_gross', 'taxable', 'taxable_amount'])
-        inv_col = first_match(cols, ['invoice', 'invoice_number', 'invoice_no'])
-        order_col = first_match(cols, ['order', 'order_id'])
+        # Column detection with fallbacks
+        state_col = (first_match(cols, ['delivery_state', 'ship_to_state', 'state', 'place_of_supply']) or
+                    first_match(cols, ['state_name', 'destination_state']))
+        taxable_col = (first_match(cols, ['taxable_value', 'tax_exclusive_gross', 'taxable', 'taxable_amount']) or
+                      first_match(cols, ['taxablevalue', 'salevalue']))
+        inv_col = first_match(cols, ['invoice', 'invoice_number', 'invoice_no', 'invoiceid'])
+        order_col = first_match(cols, ['order', 'order_id', 'orderid'])
         
         if not state_col or not taxable_col:
+            print(f"❌ Missing required columns in {filename}")
+            print(f"   State: {state_col}, Taxable: {taxable_col}")
             return
 
-        # Build clean transaction dataframe
+        print(f"   Found: state={state_col}, taxable={taxable_col}")
+
+        # Build transaction data
         temp = pd.DataFrame()
         temp['platform'] = self.platform
         temp['pos'] = raw[state_col].astype(str).apply(state_to_code)
-        temp['invoice_no'] = raw[inv_col].astype(str) if inv_col else ''
-        temp['order_id'] = raw[order_col].astype(str) if order_col else ''
+        temp['invoice_no'] = raw[inv_col].astype(str) if inv_col else np.nan
+        temp['order_id'] = raw[order_col].astype(str) if order_col else np.nan
         
-        # Tax calculation with validation
+        # Tax processing
+        taxable = num(raw[taxable_col])
         tax_cols = detect_tax_columns(cols)
-        taxable_raw = raw[taxable_col]
-        taxable = num(taxable_raw)
         
-        if any(tax_cols.values()):  # Use provided taxes if valid
+        if any(tax_cols.values()):
             igst = num(raw[tax_cols['igst']]) if tax_cols['igst'] else 0
             cgst = num(raw[tax_cols['cgst']]) if tax_cols['cgst'] else 0
             sgst = num(raw[tax_cols['sgst']]) if tax_cols['sgst'] else 0
             
-            # Validate: tax shouldn't exceed taxable
             total_tax = igst + cgst + sgst
-            valid_tax = total_tax <= taxable
-            use_calculated = ~valid_tax
+            use_calculated = total_tax > taxable
             
             temp['taxable_value'] = taxable
             temp['igst'] = np.where(use_calculated, 
-                                  calculate_tax_from_taxable(temp['pos'], taxable)[0], igst)
+                calculate_tax_from_taxable(temp['pos'], taxable)[0], igst)
             temp['cgst'] = np.where(use_calculated, 
-                                  calculate_tax_from_taxable(temp['pos'], taxable)[1], cgst)
+                calculate_tax_from_taxable(temp['pos'], taxable)[1], cgst)
             temp['sgst'] = np.where(use_calculated, 
-                                  calculate_tax_from_taxable(temp['pos'], taxable)[2], sgst)
+                calculate_tax_from_taxable(temp['pos'], taxable)[2], sgst)
         else:
             temp['taxable_value'] = taxable
             temp['igst'], temp['cgst'], temp['sgst'] = calculate_tax_from_taxable(
                 temp['pos'], taxable)
         
         temp['txn_type'] = 'sale'
-        
-        # Handle returns/credits
-        if any(word in filename.lower() for word in ['return', 'credit', 'refund']):
+
+        # Returns handling
+        if any(word in filename for word in ['return', 'credit', 'refund', 'cancel']):
             temp['taxable_value'] *= -1
             temp['igst'] *= -1
             temp['cgst'] *= -1
@@ -200,25 +216,31 @@ class BaseParser:
             temp['txn_type'] = 'return'
             if inv_col:
                 self.credit_docs.extend(safe_docs(raw[inv_col]))
+
         elif inv_col:
             self.invoice_docs.extend(safe_docs(raw[inv_col]))
 
-        # STRICT ROW FILTERING
+        # STRICT FILTERING - FIXED
+        before_filter = len(temp)
         temp = temp[temp['taxable_value'] != 0]
-        temp = temp[temp['pos'] != '00']  # Skip invalid states
+        temp = temp[temp['pos'].str.len() == 2]  # Valid state codes
         temp = temp.apply(is_valid_transaction_row, axis=1)
+        
+        after_filter = len(temp)
+        print(f"   Filtered: {before_filter} → {after_filter} rows")
         
         if not temp.empty:
             self.rows.append(temp)
 
     def parse_files(self, files: List[str]) -> Dict[str, Any]:
-        """Main entry point"""
         self.rows.clear()
         self.invoice_docs.clear()
         self.credit_docs.clear()
         self.debit_docs.clear()
         
         my_files = [f for f in files if self.is_my_file(Path(f))]
+        print(f"🔍 {self.platform}: Found {len(my_files)} files")
+        
         if not my_files:
             raise ValueError(f"No valid {self.platform} files found")
         
@@ -228,8 +250,8 @@ class BaseParser:
         if not self.rows:
             raise ValueError(f"No valid transactions found in {self.platform} files")
         
-        # ENTERPRISE DEDUPLICATION
         final = enterprise_dedupe(pd.concat(self.rows, ignore_index=True), self.platform)
+        print(f"✅ {self.platform}: {len(final)} unique transactions")
         
         summary = {
             'rows': final.to_dict('records'),
@@ -243,78 +265,81 @@ class BaseParser:
             'platform': self.platform,
             'etin': self.get_etin(),
             'summary': summary,
-            'invoice_docs': list(set(self.invoice_docs)),  # Dedupe docs
+            'invoice_docs': list(set(self.invoice_docs)),
             'credit_docs': list(set(self.credit_docs)),
             'debit_docs': list(set(self.debit_docs))
         }
 
     def get_etin(self) -> str:
-        """Override in subclasses"""
+        raise NotImplementedError
 
 
 # =====================================================
-# MARKETPLACE PARSERS
+# SPECIFIC PARSERS
 # =====================================================
 class MeeshoParser(BaseParser):
     def get_etin(self): return "07AARCM9332R1CQ"
+    def is_my_file(self, file_path: Path) -> bool:
+        name = file_path.name.lower()
+        return any(x in name for x in ['meesho', 'tcs', 'invoice', 'settlement'])
 
 class FlipkartParser(BaseParser):
     def get_etin(self): return "07AACCF0683K1CU"
+    def is_my_file(self, file_path: Path) -> bool:
+        name = file_path.name.lower()
+        return any(x in name for x in ['flipkart', 'sales', 'settlement', 'payout'])
 
 class AmazonParser(BaseParser):
     def get_etin(self): return "07AAICA3918J1CV"
+    def is_my_file(self, file_path: Path) -> bool:
+        name = file_path.name.lower()
+        return 'amazon' in name or 'amzn' in name
 
 
 # =====================================================
-# AUTO MERGE PARSER
+# AUTO MERGE
 # =====================================================
-class AutoMergeParser(BaseParser):
+class AutoMergeParser:
     def __init__(self):
-        super().__init__()
         self.parsers = [MeeshoParser(), FlipkartParser(), AmazonParser()]
-        self.results = []
 
     def parse_files(self, files: List[str]) -> Dict[str, Any]:
-        """Merge all platforms"""
+        results = []
         errors = []
         
         for parser in self.parsers:
             try:
-                result = parser.parse_files(files)
-                total = (result['summary']['total_taxable'] + 
-                        result['summary']['total_igst'] + 
-                        result['summary']['total_cgst'] + 
-                        result['summary']['total_sgst'])
+                data = parser.parse_files(files)
+                total = (data['summary']['total_taxable'] + 
+                        data['summary']['total_igst'] + 
+                        data['summary']['total_cgst'] + 
+                        data['summary']['total_sgst'])
                 if total > 0:
-                    self.results.append(result)
+                    results.append(data)
+                    print(f"✅ {parser.platform}: {data['summary']['total_taxable']:.2f}")
             except Exception as e:
-                errors.append(f"{parser.platform}: {str(e)}")
+                errors.append(str(e))
         
-        if not self.results:
-            raise ValueError("No valid data from any platform\n" + "\n".join(errors))
+        if not results:
+            raise ValueError("No valid data from any platform:\n" + "\n".join(errors))
         
-        return self._merge_results()
+        print(f"🎉 Merged {len(results)} platforms")
+        return self._merge_results(results)
 
-    def _merge_results(self) -> Dict[str, Any]:
-        """Merge with state-wise aggregation"""
-        state_totals = defaultdict(lambda: {
-            'pos': None, 'taxable_value': 0, 'igst': 0, 'cgst': 0, 'sgst': 0
-        })
+    def _merge_results(self, results):
+        state_totals = defaultdict(lambda: {'pos': None, 'taxable_value': 0, 'igst': 0, 'cgst': 0, 'sgst': 0})
         
         all_invoice_docs = []
         all_credit_docs = []
         all_debit_docs = []
         clttx = []
         
-        for result in self.results:
+        for result in results:
             summary = result['summary']
-            
-            # Aggregate docs
             all_invoice_docs.extend(result['invoice_docs'])
             all_credit_docs.extend(result['credit_docs'])
             all_debit_docs.extend(result['debit_docs'])
             
-            # Build clttx
             clttx.append({
                 'etin': result['etin'],
                 'suppval': round(summary['total_taxable'], 2),
@@ -325,7 +350,6 @@ class AutoMergeParser(BaseParser):
                 'flag': 'N'
             })
             
-            # State-wise totals
             for row in summary['rows']:
                 pos = row['pos']
                 state_totals[pos]['pos'] = pos
@@ -335,7 +359,7 @@ class AutoMergeParser(BaseParser):
                 state_totals[pos]['sgst'] += row['sgst']
         
         summary = {
-            'rows': list(state_totals.values()),
+            'rows': [{'pos': k, **v} for k, v in state_totals.items()],
             'total_taxable': round(sum(r['taxable_value'] for r in state_totals.values()), 2),
             'total_igst': round(sum(r['igst'] for r in state_totals.values()), 2),
             'total_cgst': round(sum(r['cgst'] for r in state_totals.values()), 2),
