@@ -1034,40 +1034,56 @@ class FlipkartParser(BaseParser):
                         if 'Cash Back Report' in xl.sheet_names:
                             cash_df = pd.read_excel(file, sheet_name='Cash Back Report')
                             cash_cleaned = clean_cols(cash_df)
+                            
+                            # Filter credit notes only
+                            doc_type_col = find_col(cash_cleaned.columns.tolist(), ['document_type'])
+                            if doc_type_col:
+                                cash_df = cash_cleaned[
+                                    cash_cleaned[doc_type_col].astype(str).str.strip().str.upper().str.contains('CREDIT')
+                                ].copy()
+                                logger.info(f"Filtered Cash Back to {len(cash_df)} credit notes")
+                            
                             cash_invoice_col = find_col(cash_cleaned.columns.tolist(), ['credit_note_id', 'debit_note_id'])
                             cash_state_col = find_col(cash_cleaned.columns.tolist(), ["customer's_delivery_state", 'customer_delivery_state'])
                             cash_taxable_col = find_col(cash_cleaned.columns.tolist(), ['taxable_value'])
                             cash_igst_col = find_col(cash_cleaned.columns.tolist(), ['igst_amount'])
                             cash_cgst_col = find_col(cash_cleaned.columns.tolist(), ['cgst_amount'])
                             cash_sgst_col = find_col(cash_cleaned.columns.tolist(), ['sgst_amount_or_utgst_as_applicable'])
+                            
+                            if not all([cash_state_col, cash_taxable_col]):
+                                logger.warning(f"Missing key columns in Cash Back Report")
+                                continue
+                            
                             cash_records = []
                             for idx, row in cash_cleaned.iterrows():
                                 pos = get_state_code(row.get(cash_state_col))
+                                if pd.isna(pos):
+                                    continue
                                 taxable_value = safe_num(row.get(cash_taxable_col))
                                 igst = safe_num(row.get(cash_igst_col))
                                 cgst = safe_num(row.get(cash_cgst_col))
                                 sgst = safe_num(row.get(cash_sgst_col))
-                                doc_type = str(row.get('document_type', '')).strip().lower()
-                                invoice_no = clean_invoice_no(row.get(cash_invoice_col)) or str(row.name)
+                                
+                                # Credit notes are always returns - negate values
                                 record = {
                                     'platform': self.PLATFORM,
-                                    'invoice_no': invoice_no,
+                                    'invoice_no': clean_invoice_no(row.get(cash_invoice_col)) or f"CASHBACK_{idx}",
                                     'pos': pos,
-                                    'taxable_value': taxable_value,
-                                    'igst': igst,
-                                    'cgst': cgst,
-                                    'sgst': sgst,
-                                    'txn_type': 'sale',
+                                    'taxable_value': -abs(taxable_value),
+                                    'igst': -abs(igst),
+                                    'cgst': -abs(cgst),
+                                    'sgst': -abs(sgst),
+                                    'txn_type': 'return',
                                     'source_key': f"{Path(file).name}:cashback:{idx}",
                                 }
                                 if has_financial_values(record):
                                     cash_records.append(record)
-                                if 'debit' in doc_type:
-                                    self.record_document_numbers('debit', [invoice_no])
-                                else:
-                                    self.record_document_numbers('credit', [invoice_no])
+                                    self.record_document_numbers('credit', [record['invoice_no']])
+                            
                             if cash_records:
-                                dfs.append((make_preparsed_df(cash_records, self.PLATFORM), file + '#cashback'))
+                                normalized_cashback = make_preparsed_df(cash_records, self.PLATFORM)
+                                dfs.append((normalized_cashback, file + '#cashback'))
+                                logger.info(f"Processed {len(cash_records)} cashback returns")
                         logger.info(f"Adapted {file} using Flipkart Sales/Cashback template")
                         continue
 
