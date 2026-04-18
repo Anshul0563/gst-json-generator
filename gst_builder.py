@@ -1,84 +1,112 @@
+# gst_builder.py
+# FINAL CLONE BUILDER - Works with Final parsers.py
 
-import json
-import hashlib
 from typing import Dict, Any, List
-from utils import get_state_code_map
+from datetime import datetime
+import hashlib
 
 
 class GSTBuilder:
     def __init__(self):
-        self.state_map = get_state_code_map()
+        pass
 
     # =====================================================
     # MAIN
     # =====================================================
     def build_gstr1(self, parsed_data: Dict[str, Any], gstin: str, period: str) -> Dict[str, Any]:
-        net = parsed_data["net"]
+        """
+        Build final GST JSON from single parser output
+        """
+        summary = parsed_data["summary"]
 
-        gt = round(float(net.get("total_taxable", 0)), 2)
-        cur_gt = gt
+        total_taxable = round(summary["total_taxable"], 2)
+        total_igst = round(summary["total_igst"], 2)
+        total_cgst = round(summary["total_cgst"], 2)
+        total_sgst = round(summary["total_sgst"], 2)
 
-        result = {
+        json_data = {
             "gstin": gstin,
             "fp": period,
-            "version": "GST3.0",
-            "hash": "",
-            "gt": gt,
-            "cur_gt": cur_gt,
-            "b2cs": self._build_b2cs(net.get("state_summary", [])),
-            "supeco": self._build_supeco(parsed_data),
-            "doc_issue": self._build_doc_issue(parsed_data),
+            "version": "GST3.1.6",
+            "hash": self.make_hash(gstin, period, total_taxable),
+
+            "gt": total_taxable,
+            "cur_gt": total_taxable,
+
+            "b2cs": self.build_b2cs(summary["rows"]),
+            "supeco": self.build_supeco(
+                parsed_data["etin"],
+                total_taxable,
+                total_igst,
+                total_cgst,
+                total_sgst
+            ),
+            "doc_issue": self.build_doc_issue(parsed_data)
         }
 
-        result["hash"] = self._make_hash(result)
-        return result
+        return json_data
+
+    # =====================================================
+    # HASH
+    # =====================================================
+    def make_hash(self, gstin: str, period: str, amount: float) -> str:
+        raw = f"{gstin}{period}{amount}"
+        return hashlib.md5(raw.encode()).hexdigest()
 
     # =====================================================
     # B2CS
     # =====================================================
-    def _build_b2cs(self, rows: List[Dict]) -> List[Dict]:
-        output = []
+    def build_b2cs(self, rows: List[Dict]) -> List[Dict]:
+        out = []
 
-        for row in rows:
-            txval = round(float(row.get("taxable_value", 0)), 2)
-            igst = round(float(row.get("igst", 0)), 2)
-            cgst = round(float(row.get("cgst", 0)), 2)
-            sgst = round(float(row.get("sgst", 0)), 2)
+        for r in rows:
+            pos = str(r["pos"]).zfill(2)
 
-            if abs(txval) < 0.01:
-                continue
+            taxable = round(float(r["taxable_value"]), 2)
+            igst = round(float(r["igst"]), 2)
+            cgst = round(float(r["cgst"]), 2)
+            sgst = round(float(r["sgst"]), 2)
 
-            item = {
-                "sply_ty": "INTER" if igst > 0 else "INTRA",
-                "rt": self._detect_rate(txval, igst, cgst, sgst),
-                "typ": "OE",
-                "pos": self._state_code(row.get("state_code")),
-                "txval": txval,
-                "iamt": igst,
-                "camt": cgst,
-                "samt": sgst,
-                "csamt": 0.0
-            }
+            if pos == "07":
+                row = {
+                    "sply_ty": "INTRA",
+                    "rt": 3,
+                    "typ": "OE",
+                    "pos": pos,
+                    "txval": taxable,
+                    "camt": cgst,
+                    "samt": sgst,
+                    "csamt": 0
+                }
+            else:
+                row = {
+                    "sply_ty": "INTER",
+                    "rt": 3,
+                    "typ": "OE",
+                    "pos": pos,
+                    "txval": taxable,
+                    "iamt": igst,
+                    "csamt": 0
+                }
 
-            output.append(item)
+            out.append(row)
 
-        return output
+        return out
 
     # =====================================================
     # SUPECO
     # =====================================================
-    def _build_supeco(self, parsed_data: Dict[str, Any]) -> Dict[str, Any]:
-        net = parsed_data["net"]
-
+    def build_supeco(self, etin, suppval, igst, cgst, sgst):
         return {
             "clttx": [
                 {
-                    "etin": "URP",
-                    "suppval": round(float(net.get("total_taxable", 0)), 2),
-                    "iamt": round(float(net.get("total_igst", 0)), 2),
-                    "camt": round(float(net.get("total_cgst", 0)), 2),
-                    "samt": round(float(net.get("total_sgst", 0)), 2),
-                    "csamt": 0.0
+                    "etin": etin,
+                    "suppval": round(suppval, 2),
+                    "igst": round(igst, 2),
+                    "cgst": round(cgst, 2),
+                    "sgst": round(sgst, 2),
+                    "cess": 0,
+                    "flag": "N"
                 }
             ]
         }
@@ -86,47 +114,73 @@ class GSTBuilder:
     # =====================================================
     # DOC ISSUE
     # =====================================================
-    def _build_doc_issue(self, parsed_data: Dict[str, Any]) -> List[Dict]:
-        docs = parsed_data.get("invoice_details", [])
+    def build_doc_issue(self, data):
+        sections = []
 
-        if not docs:
-            return []
+        # -------------------------
+        # Invoices
+        # -------------------------
+        invoice_docs = data.get("invoice_docs", [])
+        if invoice_docs:
+            docs = []
+            for i, d in enumerate(invoice_docs, start=1):
+                docs.append({
+                    "num": i,
+                    "from": d["from"],
+                    "to": d["to"],
+                    "totnum": d["totnum"],
+                    "cancel": 0,
+                    "net_issue": d["totnum"]
+                })
 
-        return [
-            {
-                "doc_det": [
-                    {
-                        "doc_num": 1,
-                        "docs": docs
-                    }
-                ]
-            }
-        ]
+            sections.append({
+                "doc_num": 1,
+                "doc_typ": "Invoices for outward supply",
+                "docs": docs
+            })
 
-    # =====================================================
-    # HELPERS
-    # =====================================================
-    def _state_code(self, state_name: str) -> str:
-        if state_name is None:
-            return "00"
+        # -------------------------
+        # Credit Notes
+        # -------------------------
+        credit_docs = data.get("credit_docs", [])
+        if credit_docs:
+            docs = []
+            for i, d in enumerate(credit_docs, start=1):
+                docs.append({
+                    "num": i,
+                    "from": d["from"],
+                    "to": d["to"],
+                    "totnum": d["totnum"],
+                    "cancel": 0,
+                    "net_issue": d["totnum"]
+                })
 
-        s = str(state_name).strip().upper()
+            sections.append({
+                "doc_num": 5,
+                "doc_typ": "Credit Note",
+                "docs": docs
+            })
 
-        # already numeric code
-        if s.isdigit():
-            return s.zfill(2)
+        # -------------------------
+        # Debit Notes
+        # -------------------------
+        debit_docs = data.get("debit_docs", [])
+        if debit_docs:
+            docs = []
+            for i, d in enumerate(debit_docs, start=1):
+                docs.append({
+                    "num": i,
+                    "from": d["from"],
+                    "to": d["to"],
+                    "totnum": d["totnum"],
+                    "cancel": 0,
+                    "net_issue": d["totnum"]
+                })
 
-        return self.state_map.get(s, "00")
+            sections.append({
+                "doc_num": 4,
+                "doc_typ": "Debit Note",
+                "docs": docs
+            })
 
-    def _detect_rate(self, txval: float, igst: float, cgst: float, sgst: float) -> float:
-        tax = igst + cgst + sgst
-
-        if txval == 0:
-            return 0.0
-
-        rate = (tax / txval) * 100
-        return round(rate, 2)
-
-    def _make_hash(self, data: Dict[str, Any]) -> str:
-        raw = json.dumps(data, sort_keys=True, default=str).encode()
-        return hashlib.sha256(raw).hexdigest()
+        return {"doc_det": sections}
