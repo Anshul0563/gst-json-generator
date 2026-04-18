@@ -1,3 +1,5 @@
+# main.py
+# FINAL ENTRY FILE
 
 import sys
 from PySide6.QtWidgets import QApplication
@@ -9,24 +11,25 @@ from utils import setup_logging
 
 
 def main():
-    # logging
+    # Logging
     setup_logging()
 
+    # Qt App
     app = QApplication(sys.argv)
     app.setApplicationName("GST JSON Generator Pro")
     app.setOrganizationName("X10THINK")
 
-    # parsers
+    # Parsers
     parsers = {
         "Meesho": MeeshoParser(),
         "Flipkart": FlipkartParser(),
         "Amazon": AmazonParser(),
     }
 
-    # builder
+    # Builder
     builder = GSTBuilder()
 
-    # ui
+    # UI
     window = MainWindow(parsers, builder)
     window.show()
 

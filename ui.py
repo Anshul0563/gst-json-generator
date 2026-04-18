@@ -1,19 +1,18 @@
 # ui.py
-# ULTIMATE EXACT CLONE V2 - PRODUCTION UI
+# FINAL PROFESSIONAL UI
 
 import json
 from pathlib import Path
 
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QFileDialog, QMessageBox,
     QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
-    QListWidget, QComboBox, QLineEdit, QTextEdit,
+    QListWidget, QLineEdit, QTextEdit, QComboBox,
     QProgressBar
 )
 
+from PySide6.QtCore import Qt
 from validators import run_full_validation
-from utils import save_json
 
 
 class MainWindow(QMainWindow):
@@ -24,94 +23,107 @@ class MainWindow(QMainWindow):
         self.gst_builder = gst_builder
         self.files = []
 
-        self.setWindowTitle("GST JSON Generator Pro - X10THINK")
-        self.setMinimumSize(1100, 720)
-
-        self.build_ui()
+        self.init_ui()
 
     # =====================================================
     # UI
     # =====================================================
+    def init_ui(self):
+        self.setWindowTitle("GST JSON Generator Pro")
+        self.setGeometry(100, 100, 1200, 760)
 
-    def build_ui(self):
         central = QWidget()
         self.setCentralWidget(central)
 
-        main = QVBoxLayout(central)
-        main.setContentsMargins(15, 15, 15, 15)
-        main.setSpacing(12)
+        root = QVBoxLayout(central)
+        root.setSpacing(12)
 
-        # Title
+        # Header
         title = QLabel("GST JSON Generator Pro")
         title.setAlignment(Qt.AlignCenter)
         title.setStyleSheet("""
-            font-size: 28px;
-            font-weight: 700;
-            padding: 12px;
+            font-size:28px;
+            font-weight:700;
+            padding:12px;
+            color:#111;
         """)
-        main.addWidget(title)
+        root.addWidget(title)
 
-        # Top form
+        # Top Controls
         top = QHBoxLayout()
 
         self.platform = QComboBox()
         self.platform.addItems(["Meesho", "Flipkart", "Amazon"])
+        self.platform.setMinimumHeight(40)
 
         self.gstin = QLineEdit()
         self.gstin.setPlaceholderText("Enter GSTIN")
+        self.gstin.setMinimumHeight(40)
 
         self.period = QLineEdit()
         self.period.setPlaceholderText("MMYYYY")
+        self.period.setMinimumHeight(40)
 
-        top.addWidget(QLabel("Platform"))
         top.addWidget(self.platform)
-
-        top.addWidget(QLabel("GSTIN"))
         top.addWidget(self.gstin)
-
-        top.addWidget(QLabel("Period"))
         top.addWidget(self.period)
 
-        main.addLayout(top)
+        root.addLayout(top)
 
-        # Buttons
-        row = QHBoxLayout()
+        # File Buttons
+        btns = QHBoxLayout()
 
-        self.btn_add = QPushButton("Add Files")
-        self.btn_clear = QPushButton("Clear")
-        self.btn_generate = QPushButton("Generate JSON")
+        self.add_btn = QPushButton("Add Files")
+        self.remove_btn = QPushButton("Remove Selected")
+        self.clear_btn = QPushButton("Clear All")
 
-        self.btn_add.clicked.connect(self.add_files)
-        self.btn_clear.clicked.connect(self.clear_files)
-        self.btn_generate.clicked.connect(self.generate_json)
+        self.add_btn.clicked.connect(self.add_files)
+        self.remove_btn.clicked.connect(self.remove_selected)
+        self.clear_btn.clicked.connect(self.clear_files)
 
-        row.addWidget(self.btn_add)
-        row.addWidget(self.btn_clear)
-        row.addStretch()
-        row.addWidget(self.btn_generate)
+        for b in [self.add_btn, self.remove_btn, self.clear_btn]:
+            b.setMinimumHeight(38)
+            btns.addWidget(b)
 
-        main.addLayout(row)
+        root.addLayout(btns)
 
-        # File list
+        # File List
         self.file_list = QListWidget()
-        main.addWidget(self.file_list, 2)
+        self.file_list.setMinimumHeight(220)
+        root.addWidget(self.file_list)
+
+        # Generate
+        self.generate_btn = QPushButton("GENERATE GST JSON")
+        self.generate_btn.setMinimumHeight(55)
+        self.generate_btn.clicked.connect(self.generate_json)
+        self.generate_btn.setStyleSheet("""
+            QPushButton{
+                background:#0a84ff;
+                color:white;
+                font-size:18px;
+                font-weight:700;
+                border:none;
+                border-radius:8px;
+            }
+            QPushButton:hover{
+                background:#006be6;
+            }
+        """)
+        root.addWidget(self.generate_btn)
 
         # Progress
         self.progress = QProgressBar()
         self.progress.setValue(0)
-        main.addWidget(self.progress)
+        root.addWidget(self.progress)
 
         # Logs
         self.logs = QTextEdit()
         self.logs.setReadOnly(True)
-        main.addWidget(self.logs, 3)
-
-        self.statusBar().showMessage("Ready")
+        root.addWidget(self.logs)
 
     # =====================================================
-    # ACTIONS
+    # FILES
     # =====================================================
-
     def add_files(self):
         files, _ = QFileDialog.getOpenFileNames(
             self,
@@ -123,97 +135,95 @@ class MainWindow(QMainWindow):
         for f in files:
             if f not in self.files:
                 self.files.append(f)
-                self.file_list.addItem(f)
+                self.file_list.addItem(Path(f).name)
 
         self.log(f"{len(files)} file(s) added")
 
-    def clear_files(self):
-        self.files = []
-        self.file_list.clear()
-        self.progress.setValue(0)
-        self.log("Files cleared")
+    def remove_selected(self):
+        rows = sorted(
+            [x.row() for x in self.file_list.selectedIndexes()],
+            reverse=True
+        )
 
+        for r in rows:
+            self.file_list.takeItem(r)
+            self.files.pop(r)
+
+        self.log("Selected files removed")
+
+    def clear_files(self):
+        self.files.clear()
+        self.file_list.clear()
+        self.log("All files cleared")
+
+    # =====================================================
+    # LOG
+    # =====================================================
+    def log(self, msg):
+        self.logs.append(msg)
+
+    # =====================================================
+    # MAIN GENERATE
+    # =====================================================
     def generate_json(self):
         gstin = self.gstin.text().strip().upper()
         period = self.period.text().strip()
         platform = self.platform.currentText()
 
-        ok, errors = run_full_validation(
-            gstin=gstin,
-            period=period,
-            files=self.files
-        )
+        self.progress.setValue(10)
 
+        # Validate
+        ok, errors = run_full_validation(gstin, period, self.files)
         if not ok:
             QMessageBox.warning(self, "Validation Error", "\n".join(errors))
             return
 
         try:
-            self.progress.setValue(10)
             self.log(f"Processing {len(self.files)} files for {platform}...")
+            self.progress.setValue(30)
 
             parser = self.parsers[platform]
             parsed = parser.parse_files(self.files)
 
-            self.progress.setValue(60)
-            self.log("Data parsed successfully")
+            self.progress.setValue(70)
 
-            result = self.gst_builder.build_gstr1(
+            json_data = self.gst_builder.build_gstr1(
                 parsed,
                 gstin,
                 period
             )
 
-            self.progress.setValue(85)
-            self.log("JSON built successfully")
+            self.progress.setValue(90)
 
-            ok2, errors2 = run_full_validation(
-                gstin,
-                period,
-                self.files,
-                parsed,
-                result
-            )
-
-            if not ok2:
-                QMessageBox.warning(
-                    self,
-                    "JSON Validation Warning",
-                    "\n".join(errors2)
-                )
+            # Save
+            default_name = f"GSTR1_{platform}_{period}.json"
 
             path, _ = QFileDialog.getSaveFileName(
                 self,
                 "Save JSON",
-                f"GSTR1_{platform}_{period}.json",
+                default_name,
                 "JSON Files (*.json)"
             )
 
             if path:
-                if save_json(result, path):
-                    self.progress.setValue(100)
-                    self.log(f"Saved: {path}")
-                    QMessageBox.information(
-                        self,
-                        "Success",
-                        "GST JSON Generated Successfully!"
-                    )
-                else:
-                    QMessageBox.critical(
-                        self,
-                        "Error",
-                        "Failed to save file"
-                    )
+                with open(path, "w", encoding="utf-8") as f:
+                    json.dump(json_data, f, indent=2, ensure_ascii=False)
+
+                self.progress.setValue(100)
+                self.log("JSON generated successfully")
+
+                QMessageBox.information(
+                    self,
+                    "Success",
+                    "GST JSON Generated Successfully!"
+                )
 
         except Exception as e:
-            QMessageBox.critical(self, "Error", str(e))
-            self.log(f"ERROR: {e}")
             self.progress.setValue(0)
+            self.log(f"ERROR: {str(e)}")
 
-    # =====================================================
-    # LOG
-    # =====================================================
-
-    def log(self, text):
-        self.logs.append(text)
-        self.statusBar().showMessage(text) 
+            QMessageBox.critical(
+                self,
+                "Error",
+                str(e)
+            )
