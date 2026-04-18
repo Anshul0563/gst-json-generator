@@ -1,17 +1,13 @@
 # parsers.py
-# ULTIMATE REBUILD - CORE ENGINE PART 1
+# SPEED PATCH VERSION
+# Fixes stuck at 10%
 
 import pandas as pd
 from pathlib import Path
 
 from utils import (
-    num,
-    clean_cols,
-    state_to_code,
-    first_match,
-    safe_docs,
-    remove_duplicates,
-    summarize,
+    num, clean_cols, state_to_code, first_match,
+    safe_docs, remove_duplicates, summarize
 )
 
 
@@ -21,10 +17,7 @@ class BaseParser:
 
 
 # =====================================================
-# MEESHO
-# =====================================================
 class MeeshoParser(BaseParser):
-
     ETIN = "07AARCM9332R1CQ"
 
     def parse_files(self, files):
@@ -35,7 +28,7 @@ class MeeshoParser(BaseParser):
         for file in files:
             name = Path(file).name.lower()
 
-            if "meesho" not in name and "tcs" not in name and "invoice" not in name:
+            if not any(x in name for x in ["tcs", "invoice", "meesho"]):
                 continue
 
             try:
@@ -48,10 +41,9 @@ class MeeshoParser(BaseParser):
 
             state_col = first_match(cols, ["state"])
             taxable_col = first_match(cols, ["taxable"])
-            tax_col = first_match(cols, ["tax_amount", "tax"])
-            inv_col = first_match(cols, ["invoice_no", "invoice"])
+            tax_col = first_match(cols, ["tax_amount"])
+            inv_col = first_match(cols, ["invoice"])
 
-            # docs only file
             if "invoice" in name and taxable_col is None:
                 if inv_col:
                     invoice_docs.extend(safe_docs(raw[inv_col]))
@@ -74,14 +66,13 @@ class MeeshoParser(BaseParser):
 
             temp["invoice_no"] = raw[inv_col].astype(str) if inv_col else ""
             temp["order_id"] = ""
-            temp["txn_type"] = "sale"
+            temp["txn_type"] = "return" if "return" in name else "sale"
 
             if "return" in name:
                 temp["taxable_value"] *= -1
                 temp["igst"] *= -1
                 temp["cgst"] *= -1
                 temp["sgst"] *= -1
-                temp["txn_type"] = "return"
                 if inv_col:
                     credit_docs.extend(safe_docs(raw[inv_col]))
 
@@ -90,8 +81,7 @@ class MeeshoParser(BaseParser):
         if not rows:
             raise Exception("No valid Meesho files found")
 
-        final = pd.concat(rows, ignore_index=True)
-        final = remove_duplicates(final)
+        final = remove_duplicates(pd.concat(rows, ignore_index=True))
 
         return {
             "platform": "Meesho",
@@ -102,56 +92,66 @@ class MeeshoParser(BaseParser):
             "debit_docs": []
         }
 
-# =====================================================
-# FLIPKART
+
 # =====================================================
 class FlipkartParser(BaseParser):
-
     ETIN = "07AACCF0683K1CU"
 
     def parse_files(self, files):
         rows = []
 
         for file in files:
+            name = Path(file).name.lower()
+
+            # skip unrelated files fast
+            if "flipkart" not in name and "sales" not in name:
+                continue
+
             try:
+                # read first likely useful sheet only
                 xls = pd.ExcelFile(file)
+                target = None
+
+                for s in xls.sheet_names:
+                    if any(k in s.lower() for k in ["sales", "report", "gstr"]):
+                        target = s
+                        break
+
+                if not target:
+                    continue
+
+                df = pd.read_excel(file, sheet_name=target)
+
             except:
                 continue
 
-            for sheet in xls.sheet_names:
-                try:
-                    df = pd.read_excel(file, sheet_name=sheet)
-                except:
-                    continue
+            raw = clean_cols(df)
+            cols = raw.columns.tolist()
 
-                raw = clean_cols(df)
-                cols = raw.columns.tolist()
+            state_col = first_match(cols, ["delivery_state", "state"])
+            taxable_col = first_match(cols, ["taxable_value", "taxable"])
+            inv_col = first_match(cols, ["invoice"])
 
-                state_col = first_match(cols, ["delivery_state", "state"])
-                taxable_col = first_match(cols, ["taxable_value", "taxable"])
-                inv_col = first_match(cols, ["invoice"])
+            if not state_col or not taxable_col:
+                continue
 
-                if not state_col or not taxable_col:
-                    continue
+            temp = pd.DataFrame()
+            temp["platform"] = "Flipkart"
+            temp["pos"] = raw[state_col].apply(state_to_code)
+            temp["taxable_value"] = num(raw[taxable_col])
+            temp["igst"] = num(raw["igst_amount"]) if "igst_amount" in cols else 0
+            temp["cgst"] = num(raw["cgst_amount"]) if "cgst_amount" in cols else 0
+            temp["sgst"] = num(raw["sgst_amount_or_utgst_as_applicable"]) if "sgst_amount_or_utgst_as_applicable" in cols else 0
+            temp["invoice_no"] = raw[inv_col].astype(str) if inv_col else ""
+            temp["order_id"] = ""
+            temp["txn_type"] = "sale"
 
-                temp = pd.DataFrame()
-                temp["platform"] = "Flipkart"
-                temp["pos"] = raw[state_col].apply(state_to_code)
-                temp["taxable_value"] = num(raw[taxable_col])
-                temp["igst"] = num(raw["igst_amount"]) if "igst_amount" in cols else 0
-                temp["cgst"] = num(raw["cgst_amount"]) if "cgst_amount" in cols else 0
-                temp["sgst"] = num(raw["sgst_amount_or_utgst_as_applicable"]) if "sgst_amount_or_utgst_as_applicable" in cols else 0
-                temp["invoice_no"] = raw[inv_col].astype(str) if inv_col else ""
-                temp["order_id"] = ""
-                temp["txn_type"] = "sale"
-
-                rows.append(temp)
+            rows.append(temp)
 
         if not rows:
             raise Exception("No valid Flipkart files found")
 
-        final = pd.concat(rows, ignore_index=True)
-        final = remove_duplicates(final)
+        final = remove_duplicates(pd.concat(rows, ignore_index=True))
 
         return {
             "platform": "Flipkart",
@@ -164,16 +164,17 @@ class FlipkartParser(BaseParser):
 
 
 # =====================================================
-# AMAZON
-# =====================================================
 class AmazonParser(BaseParser):
-
     ETIN = "07AAICA3918J1CV"
 
     def parse_files(self, files):
         rows = []
 
         for file in files:
+            name = Path(file).name.lower()
+            if "amazon" not in name and not file.lower().endswith(".csv"):
+                continue
+
             ext = Path(file).suffix.lower()
 
             try:
@@ -213,8 +214,7 @@ class AmazonParser(BaseParser):
         if not rows:
             raise Exception("No valid Amazon files found")
 
-        final = pd.concat(rows, ignore_index=True)
-        final = remove_duplicates(final)
+        final = remove_duplicates(pd.concat(rows, ignore_index=True))
 
         return {
             "platform": "Amazon",
@@ -225,17 +225,11 @@ class AmazonParser(BaseParser):
             "debit_docs": []
         }
 
-# =====================================================
-# AUTO MERGE PARSER
+
 # =====================================================
 class AutoMergeParser(BaseParser):
-
     def __init__(self):
-        self.parsers = [
-            MeeshoParser(),
-            FlipkartParser(),
-            AmazonParser()
-        ]
+        self.parsers = [MeeshoParser(), FlipkartParser(), AmazonParser()]
 
     def parse_files(self, files):
         results = []
@@ -243,18 +237,7 @@ class AutoMergeParser(BaseParser):
         for parser in self.parsers:
             try:
                 data = parser.parse_files(files)
-
-                s = data["summary"]
-                total = (
-                    s["total_taxable"] +
-                    s["total_igst"] +
-                    s["total_cgst"] +
-                    s["total_sgst"]
-                )
-
-                if total != 0:
-                    results.append(data)
-
+                results.append(data)
             except:
                 pass
 
@@ -266,14 +249,8 @@ class AutoMergeParser(BaseParser):
     def merge(self, results):
         state_map = {}
         clttx = []
-        invoice_docs = []
-        credit_docs = []
-        debit_docs = []
 
-        total_taxable = 0
-        total_igst = 0
-        total_cgst = 0
-        total_sgst = 0
+        total_taxable = total_igst = total_cgst = total_sgst = 0
 
         for item in results:
             s = item["summary"]
@@ -282,10 +259,6 @@ class AutoMergeParser(BaseParser):
             total_igst += s["total_igst"]
             total_cgst += s["total_cgst"]
             total_sgst += s["total_sgst"]
-
-            invoice_docs.extend(item.get("invoice_docs", []))
-            credit_docs.extend(item.get("credit_docs", []))
-            debit_docs.extend(item.get("debit_docs", []))
 
             clttx.append({
                 "etin": item["etin"],
@@ -297,9 +270,8 @@ class AutoMergeParser(BaseParser):
                 "flag": "N"
             })
 
-            for row in s["rows"]:
-                pos = row["pos"]
-
+            for r in s["rows"]:
+                pos = r["pos"]
                 if pos not in state_map:
                     state_map[pos] = {
                         "pos": pos,
@@ -309,10 +281,10 @@ class AutoMergeParser(BaseParser):
                         "sgst": 0
                     }
 
-                state_map[pos]["taxable_value"] += row["taxable_value"]
-                state_map[pos]["igst"] += row["igst"]
-                state_map[pos]["cgst"] += row["cgst"]
-                state_map[pos]["sgst"] += row["sgst"]
+                state_map[pos]["taxable_value"] += r["taxable_value"]
+                state_map[pos]["igst"] += r["igst"]
+                state_map[pos]["cgst"] += r["cgst"]
+                state_map[pos]["sgst"] += r["sgst"]
 
         return {
             "summary": {
@@ -320,10 +292,10 @@ class AutoMergeParser(BaseParser):
                 "total_taxable": round(total_taxable, 2),
                 "total_igst": round(total_igst, 2),
                 "total_cgst": round(total_cgst, 2),
-                "total_sgst": round(total_sgst, 2),
+                "total_sgst": round(total_sgst, 2)
             },
-            "invoice_docs": invoice_docs,
-            "credit_docs": credit_docs,
-            "debit_docs": debit_docs,
+            "invoice_docs": [],
+            "credit_docs": [],
+            "debit_docs": [],
             "clttx": clttx
         }
