@@ -1,22 +1,24 @@
 
+from collections import OrderedDict
+
+
 class GSTBuilder:
 
     def build_gstr1(self, parsed_data, gstin, period):
         s = parsed_data["summary"]
 
-        return {
-            "gstin": gstin,
-            "fp": period,
-            "version": "GST3.1.6",
-            "hash": "hash",
-            "b2cs": self.build_b2cs(s["rows"]),
-            "supeco": {
-                "clttx": parsed_data["clttx"]
-            },
-            "doc_issue": {
-                "doc_det": self.build_docs(parsed_data)
-            }
-        }
+        root = OrderedDict()
+        root["gstin"] = gstin
+        root["fp"] = period
+        root["version"] = "GST3.1.6"
+        root["hash"] = "hash"
+        root["b2cs"] = self.build_b2cs(s["rows"])
+        root["supeco"] = OrderedDict()
+        root["supeco"]["clttx"] = parsed_data["clttx"]
+        root["doc_issue"] = OrderedDict()
+        root["doc_issue"]["doc_det"] = self.build_docs(parsed_data)
+
+        return root
 
     # =====================================================
     def build_b2cs(self, rows):
@@ -30,27 +32,29 @@ class GSTBuilder:
             cg = round(float(r["cgst"]), 2)
             sg = round(float(r["sgst"]), 2)
 
+            # skip zero rows exactly
+            if tx == 0 and ig == 0 and cg == 0 and sg == 0:
+                continue
+
+            row = OrderedDict()
+
             if pos == "07":
-                row = {
-                    "sply_ty": "INTRA",
-                    "rt": 3,
-                    "typ": "OE",
-                    "pos": pos,
-                    "txval": tx,
-                    "camt": cg,
-                    "samt": sg,
-                    "csamt": 0
-                }
+                row["sply_ty"] = "INTRA"
+                row["rt"] = 3
+                row["typ"] = "OE"
+                row["pos"] = pos
+                row["txval"] = tx
+                row["camt"] = cg
+                row["samt"] = sg
+                row["csamt"] = 0
             else:
-                row = {
-                    "sply_ty": "INTER",
-                    "rt": 3,
-                    "typ": "OE",
-                    "pos": pos,
-                    "txval": tx,
-                    "iamt": ig if ig else round(cg + sg, 2),
-                    "csamt": 0
-                }
+                row["sply_ty"] = "INTER"
+                row["rt"] = 3
+                row["typ"] = "OE"
+                row["pos"] = pos
+                row["txval"] = tx
+                row["iamt"] = ig if ig else round(cg + sg, 2)
+                row["csamt"] = 0
 
             out.append(row)
 
@@ -60,46 +64,55 @@ class GSTBuilder:
     def build_docs(self, data):
         final = []
 
-        # invoices
-        if data.get("invoice_docs"):
-            final.append({
-                "doc_num": 1,
-                "doc_typ": "Invoices for outward supply",
-                "docs": self.make_rows(data["invoice_docs"])
-            })
+        inv = self.make_section(
+            1,
+            "Invoices for outward supply",
+            data.get("invoice_docs", [])
+        )
+        if inv:
+            final.append(inv)
 
-        # credit note
-        if data.get("credit_docs"):
-            final.append({
-                "doc_num": 5,
-                "doc_typ": "Credit Note",
-                "docs": self.make_rows(data["credit_docs"])
-            })
+        cr = self.make_section(
+            5,
+            "Credit Note",
+            data.get("credit_docs", [])
+        )
+        if cr:
+            final.append(cr)
 
-        # debit note
-        if data.get("debit_docs"):
-            final.append({
-                "doc_num": 4,
-                "doc_typ": "Debit Note",
-                "docs": self.make_rows(data["debit_docs"])
-            })
+        dr = self.make_section(
+            4,
+            "Debit Note",
+            data.get("debit_docs", [])
+        )
+        if dr:
+            final.append(dr)
 
         return final
 
     # =====================================================
-    def make_rows(self, docs):
-        rows = []
+    def make_section(self, doc_num, doc_typ, docs):
+        clean = []
 
         for i, d in enumerate(docs, start=1):
             qty = int(d["totnum"])
 
-            rows.append({
-                "num": i,
-                "from": d["from"],
-                "to": d["to"],
-                "totnum": qty,
-                "cancel": 0,
-                "net_issue": qty
-            })
+            row = OrderedDict()
+            row["num"] = i
+            row["from"] = str(d["from"])
+            row["to"] = str(d["to"])
+            row["totnum"] = qty
+            row["cancel"] = 0
+            row["net_issue"] = qty
 
-        return rows
+            clean.append(row)
+
+        if not clean:
+            return None
+
+        block = OrderedDict()
+        block["doc_num"] = doc_num
+        block["doc_typ"] = doc_typ
+        block["docs"] = clean
+
+        return block
