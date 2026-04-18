@@ -1,48 +1,33 @@
 # gst_builder.py
-# FINAL MERGE SUPPORT VERSION
+# ULTIMATE V3 BUILDER (DELHI TAX FIX + CLEAN OUTPUT)
 
-from typing import Dict, Any, List
+from typing import Dict, List
 import hashlib
 
 
 class GSTBuilder:
 
-    # =====================================================
-    # MAIN
-    # =====================================================
-    def build_gstr1(self, parsed_data: Dict[str, Any], gstin: str, period: str):
-        summary = parsed_data["summary"]
+    def build_gstr1(self, parsed_data, gstin, period):
+        s = parsed_data["summary"]
 
-        total_taxable = round(summary["total_taxable"], 2)
-        total_igst = round(summary["total_igst"], 2)
-        total_cgst = round(summary["total_cgst"], 2)
-        total_sgst = round(summary["total_sgst"], 2)
+        gt = round(s["total_taxable"], 2)
 
-        json_data = {
+        return {
             "gstin": gstin,
             "fp": period,
             "version": "GST3.1.6",
-            "hash": self.make_hash(gstin, period, total_taxable),
-
-            "gt": total_taxable,
-            "cur_gt": total_taxable,
-
-            "b2cs": self.build_b2cs(summary["rows"]),
+            "hash": self.make_hash(gstin, period, gt),
+            "gt": gt,
+            "cur_gt": gt,
+            "b2cs": self.build_b2cs(s["rows"]),
             "supeco": self.build_supeco(parsed_data),
-            "doc_issue": self.build_doc_issue(parsed_data)
+            "doc_issue": {"doc_det": []}
         }
 
-        return json_data
-
-    # =====================================================
-    # HASH
     # =====================================================
     def make_hash(self, gstin, period, amount):
-        raw = f"{gstin}{period}{amount}"
-        return hashlib.md5(raw.encode()).hexdigest()
+        return hashlib.md5(f"{gstin}{period}{amount}".encode()).hexdigest()
 
-    # =====================================================
-    # B2CS
     # =====================================================
     def build_b2cs(self, rows: List[Dict]):
         out = []
@@ -50,13 +35,19 @@ class GSTBuilder:
         for r in rows:
             pos = str(r["pos"]).zfill(2)
 
-            tx = round(r["taxable_value"], 2)
-            ig = round(r["igst"], 2)
-            cg = round(r["cgst"], 2)
-            sg = round(r["sgst"], 2)
+            tx = round(float(r["taxable_value"]), 2)
+            ig = round(float(r["igst"]), 2)
+            cg = round(float(r["cgst"]), 2)
+            sg = round(float(r["sgst"]), 2)
 
+            # Delhi = intra
             if pos == "07":
-                out.append({
+                # if no cgst/sgst available then split igst
+                if cg == 0 and sg == 0 and ig > 0:
+                    cg = round(ig / 2, 2)
+                    sg = round(ig / 2, 2)
+
+                row = {
                     "sply_ty": "INTRA",
                     "rt": 3,
                     "typ": "OE",
@@ -65,99 +56,40 @@ class GSTBuilder:
                     "camt": cg,
                     "samt": sg,
                     "csamt": 0
-                })
+                }
+
             else:
-                out.append({
+                row = {
                     "sply_ty": "INTER",
                     "rt": 3,
                     "typ": "OE",
                     "pos": pos,
                     "txval": tx,
-                    "iamt": ig,
+                    "iamt": ig if ig else round(cg + sg, 2),
                     "csamt": 0
-                })
+                }
+
+            out.append(row)
 
         return out
 
     # =====================================================
-    # SUPECO
-    # =====================================================
     def build_supeco(self, data):
-        # merged mode
         if "clttx" in data:
             return {"clttx": data["clttx"]}
 
-        # single mode
-        return {
-            "clttx": [{
-                "etin": data["etin"],
-                "suppval": round(data["summary"]["total_taxable"], 2),
-                "igst": round(data["summary"]["total_igst"], 2),
-                "cgst": round(data["summary"]["total_cgst"], 2),
-                "sgst": round(data["summary"]["total_sgst"], 2),
-                "cess": 0,
-                "flag": "N"
-            }]
-        }
-
-    # =====================================================
-    # DOC ISSUE
-    # =====================================================
-    def build_doc_issue(self, data):
-        blocks = []
-
-        # invoices
-        inv = self.make_docs(
-            data.get("invoice_docs", []),
-            1,
-            "Invoices for outward supply"
-        )
-        if inv:
-            blocks.append(inv)
-
-        # credit
-        cr = self.make_docs(
-            data.get("credit_docs", []),
-            5,
-            "Credit Note"
-        )
-        if cr:
-            blocks.append(cr)
-
-        # debit
-        dr = self.make_docs(
-            data.get("debit_docs", []),
-            4,
-            "Debit Note"
-        )
-        if dr:
-            blocks.append(dr)
-
-        return {"doc_det": blocks}
-
-    # =====================================================
-    # MAKE DOCS
-    # =====================================================
-    def make_docs(self, rows, doc_num, title):
-        if not rows:
-            return None
-
-        docs = []
-
-        for i, d in enumerate(rows, start=1):
-            qty = int(d["totnum"])
-
-            docs.append({
-                "num": i,
-                "from": d["from"],
-                "to": d["to"],
-                "totnum": qty,
-                "cancel": 0,
-                "net_issue": qty
-            })
+        s = data["summary"]
 
         return {
-            "doc_num": doc_num,
-            "doc_typ": title,
-            "docs": docs
+            "clttx": [
+                {
+                    "etin": data["etin"],
+                    "suppval": round(s["total_taxable"], 2),
+                    "igst": round(s["total_igst"], 2),
+                    "cgst": round(s["total_cgst"], 2),
+                    "sgst": round(s["total_sgst"], 2),
+                    "cess": 0,
+                    "flag": "N"
+                }
+            ]
         }

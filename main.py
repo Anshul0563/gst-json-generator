@@ -1,69 +1,55 @@
 # main.py
-# ULTIMATE FINAL AUTO MERGE VERSION
+# FINAL ENTRY FILE
 
 import sys
 from PySide6.QtWidgets import QApplication
-from ui import MainWindow
-from gst_builder import GSTBuilder
-from utils import setup_logging
 
-# individual parsers
+from ui import MainWindow
+from utils import setup_logging
+from gst_builder import GSTBuilder
 from parsers import MeeshoParser, FlipkartParser, AmazonParser
 
 
+# =====================================================
+# MERGE ENGINE
+# =====================================================
 class MergeParser:
-    """
-    Auto detect all uploaded files
-    Parse all marketplaces
-    Merge final totals
-    """
 
     def __init__(self):
-        self.parsers = {
-            "Meesho": MeeshoParser(),
-            "Flipkart": FlipkartParser(),
-            "Amazon": AmazonParser()
-        }
+        self.parsers = [
+            MeeshoParser(),
+            FlipkartParser(),
+            AmazonParser()
+        ]
 
     def parse_files(self, files):
-        results = []
+        outputs = []
 
-        # -----------------------------------
-        # run all parsers safely
-        # -----------------------------------
-        for name, parser in self.parsers.items():
+        for parser in self.parsers:
             try:
-                r = parser.parse_files(files)
+                data = parser.parse_files(files)
 
-                # valid data only
-                if r["summary"]["total_taxable"] != 0:
-                    results.append(r)
+                if data["summary"]["total_taxable"] > 0:
+                    outputs.append(data)
 
             except:
                 pass
 
-        if not results:
+        if not outputs:
             raise Exception("No valid marketplace data found")
 
-        return self.merge(results)
+        return self.merge(outputs)
 
-    # =====================================
-    # MERGE ALL
-    # =====================================
-    def merge(self, results):
+    def merge(self, arr):
         state_map = {}
         clttx = []
-
-        invoice_docs = []
-        credit_docs = []
-        debit_docs = []
 
         total_taxable = 0
         total_igst = 0
         total_cgst = 0
         total_sgst = 0
 
-        for item in results:
+        for item in arr:
             s = item["summary"]
 
             total_taxable += s["total_taxable"]
@@ -71,9 +57,8 @@ class MergeParser:
             total_cgst += s["total_cgst"]
             total_sgst += s["total_sgst"]
 
-            # state merge
-            for row in s["rows"]:
-                pos = row["pos"]
+            for r in s["rows"]:
+                pos = r["pos"]
 
                 if pos not in state_map:
                     state_map[pos] = {
@@ -84,12 +69,11 @@ class MergeParser:
                         "sgst": 0
                     }
 
-                state_map[pos]["taxable_value"] += row["taxable_value"]
-                state_map[pos]["igst"] += row["igst"]
-                state_map[pos]["cgst"] += row["cgst"]
-                state_map[pos]["sgst"] += row["sgst"]
+                state_map[pos]["taxable_value"] += r["taxable_value"]
+                state_map[pos]["igst"] += r["igst"]
+                state_map[pos]["cgst"] += r["cgst"]
+                state_map[pos]["sgst"] += r["sgst"]
 
-            # supeco lines
             clttx.append({
                 "etin": item["etin"],
                 "suppval": round(s["total_taxable"], 2),
@@ -100,14 +84,8 @@ class MergeParser:
                 "flag": "N"
             })
 
-            # docs
-            invoice_docs.extend(item.get("invoice_docs", []))
-            credit_docs.extend(item.get("credit_docs", []))
-            debit_docs.extend(item.get("debit_docs", []))
-
-        merged = {
+        return {
             "platform": "Merged",
-            "etin": "MULTI",
             "summary": {
                 "rows": list(state_map.values()),
                 "total_taxable": round(total_taxable, 2),
@@ -115,17 +93,10 @@ class MergeParser:
                 "total_cgst": round(total_cgst, 2),
                 "total_sgst": round(total_sgst, 2),
             },
-            "invoice_docs": invoice_docs,
-            "credit_docs": credit_docs,
-            "debit_docs": debit_docs,
             "clttx": clttx
         }
 
-        return merged
 
-
-# =====================================================
-# APP START
 # =====================================================
 def main():
     setup_logging()

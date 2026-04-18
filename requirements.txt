@@ -1,7 +1,6 @@
-fastapi
-uvicorn[standard]
-python-multipart
+# requirements.txt
+
+PySide6
 pandas
 openpyxl
-python-dotenv
-PySide6
+xlrd

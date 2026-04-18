@@ -1,5 +1,5 @@
 # parsers.py
-# FINAL WORKING VERSION (AUTO DETECT + MERGE COMPATIBLE)
+# ULTIMATE V3 - FIXED STATE / FLIPKART / CLEAN MERGE
 
 import pandas as pd
 from pathlib import Path
@@ -20,8 +20,10 @@ STATE_CODES = {
     "uttarakhand": "05",
     "haryana": "06",
     "delhi": "07",
+    "new delhi": "07",
     "rajasthan": "08",
     "uttar pradesh": "09",
+    "up": "09",
     "bihar": "10",
     "sikkim": "11",
     "arunachal pradesh": "12",
@@ -34,6 +36,7 @@ STATE_CODES = {
     "west bengal": "19",
     "jharkhand": "20",
     "odisha": "21",
+    "orissa": "21",
     "chhattisgarh": "22",
     "madhya pradesh": "23",
     "gujarat": "24",
@@ -42,6 +45,7 @@ STATE_CODES = {
     "goa": "30",
     "kerala": "32",
     "tamil nadu": "33",
+    "pondicherry": "34",
     "puducherry": "34",
     "telangana": "36",
     "andhra pradesh": "37",
@@ -51,13 +55,20 @@ STATE_CODES = {
 
 def state_to_code(v):
     if pd.isna(v):
-        return "00"
+        return None
 
     s = str(v).strip().lower()
-    return STATE_CODES.get(s, "00")
+    s = " ".join(s.split())
+
+    if s.isdigit() and len(s) == 2:
+        return s
+
+    return STATE_CODES.get(s)
 
 
 def build_summary(df):
+    df = df[df["pos"].notna()].copy()
+
     if df.empty:
         return {
             "rows": [],
@@ -84,9 +95,6 @@ def build_summary(df):
     }
 
 
-# =====================================================
-# BASE
-# =====================================================
 class BaseParser:
     def parse_files(self, files):
         raise NotImplementedError
@@ -101,11 +109,6 @@ class MeeshoParser(BaseParser):
         frames = []
 
         for file in files:
-            name = Path(file).name.lower()
-
-            if "meesho" not in name and "tax_invoice" not in name and "tcs" not in name:
-                continue
-
             try:
                 df = pd.read_excel(file)
             except:
@@ -113,32 +116,25 @@ class MeeshoParser(BaseParser):
 
             cols = [str(c).lower().strip() for c in df.columns]
 
-            if "end_customer_state_new" in cols:
-                df.columns = cols
+            if "end_customer_state_new" not in cols:
+                continue
 
-                taxable_col = None
-                for c in cols:
-                    if "taxable" in c:
-                        taxable_col = c
-                        break
+            df.columns = cols
 
-                tax_col = None
-                for c in cols:
-                    if "tax_amount" in c or c == "tax":
-                        tax_col = c
-                        break
+            taxable_col = next((c for c in cols if "taxable" in c), None)
+            tax_col = next((c for c in cols if "tax_amount" in c), None)
 
-                if taxable_col is None:
-                    continue
+            if not taxable_col:
+                continue
 
-                temp = pd.DataFrame()
-                temp["pos"] = df["end_customer_state_new"].apply(state_to_code)
-                temp["taxable_value"] = num(df[taxable_col])
-                temp["igst"] = num(df[tax_col]) if tax_col else 0
-                temp["cgst"] = 0
-                temp["sgst"] = 0
+            temp = pd.DataFrame()
+            temp["pos"] = df["end_customer_state_new"].apply(state_to_code)
+            temp["taxable_value"] = num(df[taxable_col])
+            temp["igst"] = num(df[tax_col]) if tax_col else 0
+            temp["cgst"] = 0
+            temp["sgst"] = 0
 
-                frames.append(temp)
+            frames.append(temp)
 
         if not frames:
             raise Exception("No valid Meesho files found")
@@ -170,7 +166,7 @@ class FlipkartParser(BaseParser):
                 continue
 
             for sheet in xls.sheet_names:
-                if "sales" not in sheet.lower():
+                if not any(k in sheet.lower() for k in ["sales", "report", "gstr"]):
                     continue
 
                 try:
@@ -189,20 +185,14 @@ class FlipkartParser(BaseParser):
 
                 cols = df.columns.tolist()
 
-                if "customers_delivery_state" not in cols:
-                    continue
+                state_col = next((c for c in cols if "delivery_state" in c), None)
+                taxable_col = next((c for c in cols if "taxable_value" in c), None)
 
-                taxable_col = None
-                for c in cols:
-                    if "taxable_value" in c:
-                        taxable_col = c
-                        break
-
-                if taxable_col is None:
+                if not state_col or not taxable_col:
                     continue
 
                 temp = pd.DataFrame()
-                temp["pos"] = df["customers_delivery_state"].apply(state_to_code)
+                temp["pos"] = df[state_col].apply(state_to_code)
                 temp["taxable_value"] = num(df[taxable_col])
                 temp["igst"] = num(df["igst_amount"]) if "igst_amount" in cols else 0
                 temp["cgst"] = num(df["cgst_amount"]) if "cgst_amount" in cols else 0
@@ -236,23 +226,15 @@ class AmazonParser(BaseParser):
         for file in files:
             ext = Path(file).suffix.lower()
 
-            # try csv
-            if ext == ".csv":
-                try:
-                    df = pd.read_csv(file, encoding="utf-8")
-                except:
+            try:
+                if ext == ".csv":
                     try:
-                        df = pd.read_csv(file, encoding="latin1")
+                        df = pd.read_csv(file, encoding="utf-8")
                     except:
-                        continue
-
-            # try excel
-            elif ext in [".xlsx", ".xls"]:
-                try:
+                        df = pd.read_csv(file, encoding="latin1")
+                else:
                     df = pd.read_excel(file)
-                except:
-                    continue
-            else:
+            except:
                 continue
 
             df.columns = [
