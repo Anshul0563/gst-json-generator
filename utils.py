@@ -1,7 +1,9 @@
+# utils.py
+# FINAL SUPPORT FILE
 
+import re
 import json
 import logging
-import re
 import sys
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
@@ -11,7 +13,6 @@ from typing import Dict, Any
 # =====================================================
 # LOGGING
 # =====================================================
-
 def setup_logging():
     log_dir = Path("logs")
     log_dir.mkdir(exist_ok=True)
@@ -34,10 +35,13 @@ def setup_logging():
 
 
 # =====================================================
-# VALIDATORS
+# GSTIN VALIDATION
 # =====================================================
-
 def validate_gstin(gstin: str) -> bool:
+    """
+    GSTIN Format:
+    07ABCDE1234F1Z5
+    """
     if not gstin:
         return False
 
@@ -47,118 +51,103 @@ def validate_gstin(gstin: str) -> bool:
     return bool(re.match(pattern, gstin))
 
 
+# =====================================================
+# PERIOD VALIDATION
+# =====================================================
 def validate_period(period: str) -> bool:
-    if not period:
+    """
+    MMYYYY
+    Example: 032026
+    """
+    if not period or len(period) != 6 or not period.isdigit():
         return False
 
-    period = str(period).strip()
+    month = int(period[:2])
+    year = int(period[2:])
 
-    if not period.isdigit() or len(period) != 6:
+    if month < 1 or month > 12:
         return False
 
-    mm = int(period[:2])
-    yyyy = int(period[2:])
+    if year < 2020 or year > 2100:
+        return False
 
-    return 1 <= mm <= 12 and 2000 <= yyyy <= 2100
+    return True
 
 
 # =====================================================
 # SAVE JSON
 # =====================================================
-
-def save_json(data: Dict[str, Any], filepath: str) -> bool:
+def save_json(data: Dict[str, Any], file_path: str) -> bool:
     try:
-        with open(filepath, "w", encoding="utf-8") as f:
+        with open(file_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
+
         return True
-    except Exception:
-        logging.exception("Failed to save JSON")
+
+    except Exception as e:
+        logging.error(f"JSON save failed: {e}")
         return False
 
 
 # =====================================================
 # STATE CODE MAP
 # =====================================================
-
-def get_state_code_map() -> Dict[str, str]:
+def get_state_code_map():
     return {
-        # Union Territories / States
-        "JAMMU AND KASHMIR": "01",
-        "HIMACHAL PRADESH": "02",
-        "PUNJAB": "03",
-        "CHANDIGARH": "04",
-        "UTTARAKHAND": "05",
-        "HARYANA": "06",
-        "DELHI": "07",
-        "RAJASTHAN": "08",
-        "UTTAR PRADESH": "09",
-        "BIHAR": "10",
-        "SIKKIM": "11",
-        "ARUNACHAL PRADESH": "12",
-        "NAGALAND": "13",
-        "MANIPUR": "14",
-        "MIZORAM": "15",
-        "TRIPURA": "16",
-        "MEGHALAYA": "17",
-        "ASSAM": "18",
-        "WEST BENGAL": "19",
-        "JHARKHAND": "20",
-        "ODISHA": "21",
-        "ORISSA": "21",
-        "CHHATTISGARH": "22",
-        "MADHYA PRADESH": "23",
-        "GUJARAT": "24",
-        "DAMAN AND DIU": "25",
-        "DADRA AND NAGAR HAVELI": "26",
-        "MAHARASHTRA": "27",
-        "ANDHRA PRADESH (OLD)": "28",
-        "KARNATAKA": "29",
-        "GOA": "30",
-        "LAKSHADWEEP": "31",
-        "KERALA": "32",
-        "TAMIL NADU": "33",
-        "PUDUCHERRY": "34",
-        "ANDAMAN AND NICOBAR ISLANDS": "35",
-        "TELANGANA": "36",
-        "ANDHRA PRADESH": "37",
-        "LADAKH": "38",
-
-        # Common Short Codes
-        "JK": "01",
-        "HP": "02",
-        "PB": "03",
-        "CH": "04",
-        "UK": "05",
-        "HR": "06",
-        "DL": "07",
-        "RJ": "08",
-        "UP": "09",
-        "BR": "10",
-        "SK": "11",
-        "AR": "12",
-        "NL": "13",
-        "MN": "14",
-        "MZ": "15",
-        "TR": "16",
-        "ML": "17",
-        "AS": "18",
-        "WB": "19",
-        "JH": "20",
-        "OD": "21",
-        "OR": "21",
-        "CG": "22",
-        "MP": "23",
-        "GJ": "24",
-        "DNHDD": "26",
-        "MH": "27",
-        "KA": "29",
-        "GA": "30",
-        "KL": "32",
-        "TN": "33",
-        "PY": "34",
-        "AN": "35",
-        "TG": "36",
-        "TS": "36",
-        "AP": "37",
-        "LD": "38",
+        "01": "Jammu and Kashmir",
+        "02": "Himachal Pradesh",
+        "03": "Punjab",
+        "04": "Chandigarh",
+        "05": "Uttarakhand",
+        "06": "Haryana",
+        "07": "Delhi",
+        "08": "Rajasthan",
+        "09": "Uttar Pradesh",
+        "10": "Bihar",
+        "11": "Sikkim",
+        "12": "Arunachal Pradesh",
+        "13": "Nagaland",
+        "14": "Manipur",
+        "15": "Mizoram",
+        "16": "Tripura",
+        "17": "Meghalaya",
+        "18": "Assam",
+        "19": "West Bengal",
+        "20": "Jharkhand",
+        "21": "Odisha",
+        "22": "Chhattisgarh",
+        "23": "Madhya Pradesh",
+        "24": "Gujarat",
+        "25": "Daman and Diu",
+        "26": "Dadra and Nagar Haveli",
+        "27": "Maharashtra",
+        "29": "Karnataka",
+        "30": "Goa",
+        "31": "Lakshadweep",
+        "32": "Kerala",
+        "33": "Tamil Nadu",
+        "34": "Puducherry",
+        "35": "Andaman and Nicobar Islands",
+        "36": "Telangana",
+        "37": "Andhra Pradesh",
+        "38": "Ladakh"
     }
+
+
+# =====================================================
+# SAFE FLOAT
+# =====================================================
+def safe_float(v):
+    try:
+        if v is None or v == "":
+            return 0.0
+        return float(v)
+    except:
+        return 0.0
+
+
+# =====================================================
+# FILE EXISTS
+# =====================================================
+def file_exists(path: str) -> bool:
+    return Path(path).exists()

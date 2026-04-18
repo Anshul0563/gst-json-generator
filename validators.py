@@ -1,74 +1,112 @@
+# validators.py
+# FINAL VALIDATION FILE
 
-from typing import Dict, Any, List, Tuple
-from utils import validate_gstin, validate_period
+import re
+from pathlib import Path
+from typing import Dict, List, Tuple, Any
 
 
 class GSTValidator:
 
     # =====================================================
-    # INPUT VALIDATION
+    # GSTIN
     # =====================================================
-
     @staticmethod
-    def validate_inputs(
-        gstin: str,
-        period: str,
-        files: List[str]
-    ) -> Tuple[bool, List[str]]:
+    def validate_gstin(gstin: str) -> Tuple[bool, str]:
+        if not gstin:
+            return False, "GSTIN required"
 
+        gstin = gstin.strip().upper()
+
+        pattern = r"^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$"
+
+        if not re.match(pattern, gstin):
+            return False, "Invalid GSTIN format"
+
+        return True, "Valid GSTIN"
+
+    # =====================================================
+    # PERIOD
+    # =====================================================
+    @staticmethod
+    def validate_period(period: str) -> Tuple[bool, str]:
+        if not period:
+            return False, "Return period required"
+
+        if len(period) != 6 or not period.isdigit():
+            return False, "Use MMYYYY format"
+
+        month = int(period[:2])
+        year = int(period[2:])
+
+        if month < 1 or month > 12:
+            return False, "Invalid month"
+
+        if year < 2020 or year > 2100:
+            return False, "Invalid year"
+
+        return True, "Valid period"
+
+    # =====================================================
+    # FILES
+    # =====================================================
+    @staticmethod
+    def validate_files(files: List[str]) -> Tuple[bool, List[str]]:
         errors = []
-
-        if not validate_gstin(gstin):
-            errors.append("Invalid GSTIN")
-
-        if not validate_period(period):
-            errors.append("Invalid Period (MMYYYY)")
+        valid = []
 
         if not files:
-            errors.append("No files selected")
+            return False, ["No files selected"]
 
-        return len(errors) == 0, errors
+        for f in files:
+            p = Path(f)
+
+            if not p.exists():
+                errors.append(f"Missing file: {p.name}")
+                continue
+
+            if p.suffix.lower() not in [".xlsx", ".xls", ".csv"]:
+                errors.append(f"Unsupported file: {p.name}")
+                continue
+
+            valid.append(str(p))
+
+        if not valid:
+            return False, errors
+
+        return True, errors
 
     # =====================================================
-    # PARSED DATA VALIDATION
+    # PARSED DATA
     # =====================================================
-
     @staticmethod
     def validate_parsed_data(data: Dict[str, Any]) -> Tuple[bool, List[str]]:
         errors = []
 
         if not isinstance(data, dict):
-            return False, ["Parsed data must be dictionary"]
+            return False, ["Parsed data invalid"]
 
-        if "platform" not in data:
-            errors.append("Missing platform")
+        required = ["platform", "summary"]
 
-        if "net" not in data:
-            errors.append("Missing net section")
-            return False, errors
+        for k in required:
+            if k not in data:
+                errors.append(f"Missing key: {k}")
 
-        net = data["net"]
+        summary = data.get("summary", {})
 
-        required = [
-            "state_summary",
-            "total_taxable",
-            "total_igst",
-            "total_cgst",
-            "total_sgst"
-        ]
+        if "rows" not in summary:
+            errors.append("Missing summary rows")
 
-        for key in required:
-            if key not in net:
-                errors.append(f"Missing net.{key}")
+        if summary.get("total_taxable", 0) < 0:
+            errors.append("Negative taxable value")
 
         return len(errors) == 0, errors
 
     # =====================================================
-    # JSON VALIDATION
+    # FINAL JSON
     # =====================================================
-
     @staticmethod
-    def validate_json(data: Dict[str, Any]) -> Tuple[bool, List[str]]:
+    def validate_json(json_data: Dict[str, Any]) -> Tuple[bool, List[str]]:
         errors = []
 
         required = [
@@ -83,38 +121,33 @@ class GSTValidator:
             "doc_issue"
         ]
 
-        for key in required:
-            if key not in data:
-                errors.append(f"Missing {key}")
+        for k in required:
+            if k not in json_data:
+                errors.append(f"Missing JSON field: {k}")
 
-        # b2cs row check
-        for i, row in enumerate(data.get("b2cs", [])):
-            row_req = [
-                "sply_ty",
-                "rt",
-                "typ",
-                "pos",
-                "txval",
-                "iamt",
-                "camt",
-                "samt",
-                "csamt"
-            ]
-            for k in row_req:
-                if k not in row:
-                    errors.append(f"b2cs[{i}] missing {k}")
+        # GSTIN check
+        ok, msg = GSTValidator.validate_gstin(json_data.get("gstin", ""))
+        if not ok:
+            errors.append(msg)
 
-        # supeco
-        if "clttx" not in data.get("supeco", {}):
-            errors.append("supeco.clttx missing")
+        # Period check
+        ok, msg = GSTValidator.validate_period(json_data.get("fp", ""))
+        if not ok:
+            errors.append(msg)
+
+        # Totals
+        if json_data.get("gt", 0) < 0:
+            errors.append("Grand total invalid")
+
+        if not isinstance(json_data.get("b2cs", []), list):
+            errors.append("b2cs must be list")
 
         return len(errors) == 0, errors
 
 
 # =====================================================
-# QUICK PIPELINE
+# COMPLETE PIPELINE
 # =====================================================
-
 def run_full_validation(
     gstin: str,
     period: str,
@@ -124,15 +157,28 @@ def run_full_validation(
 ):
     errors = []
 
-    ok, e = GSTValidator.validate_inputs(gstin, period, files)
-    errors.extend(e)
+    # GSTIN
+    ok, msg = GSTValidator.validate_gstin(gstin)
+    if not ok:
+        errors.append(msg)
 
-    if parsed_data is not None:
-        ok2, e2 = GSTValidator.validate_parsed_data(parsed_data)
-        errors.extend(e2)
+    # PERIOD
+    ok, msg = GSTValidator.validate_period(period)
+    if not ok:
+        errors.append(msg)
 
-    if json_data is not None:
-        ok3, e3 = GSTValidator.validate_json(json_data)
-        errors.extend(e3)
+    # FILES
+    ok, file_errors = GSTValidator.validate_files(files)
+    errors.extend(file_errors)
+
+    # PARSED
+    if parsed_data:
+        ok, e = GSTValidator.validate_parsed_data(parsed_data)
+        errors.extend(e)
+
+    # JSON
+    if json_data:
+        ok, e = GSTValidator.validate_json(json_data)
+        errors.extend(e)
 
     return len(errors) == 0, errors
