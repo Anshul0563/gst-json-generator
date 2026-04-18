@@ -1,22 +1,16 @@
 # gst_builder.py
-# FINAL CLONE BUILDER - Works with Final parsers.py
+# FINAL MERGE SUPPORT VERSION
 
 from typing import Dict, Any, List
-from datetime import datetime
 import hashlib
 
 
 class GSTBuilder:
-    def __init__(self):
-        pass
 
     # =====================================================
     # MAIN
     # =====================================================
-    def build_gstr1(self, parsed_data: Dict[str, Any], gstin: str, period: str) -> Dict[str, Any]:
-        """
-        Build final GST JSON from single parser output
-        """
+    def build_gstr1(self, parsed_data: Dict[str, Any], gstin: str, period: str):
         summary = parsed_data["summary"]
 
         total_taxable = round(summary["total_taxable"], 2)
@@ -34,13 +28,7 @@ class GSTBuilder:
             "cur_gt": total_taxable,
 
             "b2cs": self.build_b2cs(summary["rows"]),
-            "supeco": self.build_supeco(
-                parsed_data["etin"],
-                total_taxable,
-                total_igst,
-                total_cgst,
-                total_sgst
-            ),
+            "supeco": self.build_supeco(parsed_data),
             "doc_issue": self.build_doc_issue(parsed_data)
         }
 
@@ -49,138 +37,127 @@ class GSTBuilder:
     # =====================================================
     # HASH
     # =====================================================
-    def make_hash(self, gstin: str, period: str, amount: float) -> str:
+    def make_hash(self, gstin, period, amount):
         raw = f"{gstin}{period}{amount}"
         return hashlib.md5(raw.encode()).hexdigest()
 
     # =====================================================
     # B2CS
     # =====================================================
-    def build_b2cs(self, rows: List[Dict]) -> List[Dict]:
+    def build_b2cs(self, rows: List[Dict]):
         out = []
 
         for r in rows:
             pos = str(r["pos"]).zfill(2)
 
-            taxable = round(float(r["taxable_value"]), 2)
-            igst = round(float(r["igst"]), 2)
-            cgst = round(float(r["cgst"]), 2)
-            sgst = round(float(r["sgst"]), 2)
+            tx = round(r["taxable_value"], 2)
+            ig = round(r["igst"], 2)
+            cg = round(r["cgst"], 2)
+            sg = round(r["sgst"], 2)
 
             if pos == "07":
-                row = {
+                out.append({
                     "sply_ty": "INTRA",
                     "rt": 3,
                     "typ": "OE",
                     "pos": pos,
-                    "txval": taxable,
-                    "camt": cgst,
-                    "samt": sgst,
+                    "txval": tx,
+                    "camt": cg,
+                    "samt": sg,
                     "csamt": 0
-                }
+                })
             else:
-                row = {
+                out.append({
                     "sply_ty": "INTER",
                     "rt": 3,
                     "typ": "OE",
                     "pos": pos,
-                    "txval": taxable,
-                    "iamt": igst,
+                    "txval": tx,
+                    "iamt": ig,
                     "csamt": 0
-                }
-
-            out.append(row)
+                })
 
         return out
 
     # =====================================================
     # SUPECO
     # =====================================================
-    def build_supeco(self, etin, suppval, igst, cgst, sgst):
+    def build_supeco(self, data):
+        # merged mode
+        if "clttx" in data:
+            return {"clttx": data["clttx"]}
+
+        # single mode
         return {
-            "clttx": [
-                {
-                    "etin": etin,
-                    "suppval": round(suppval, 2),
-                    "igst": round(igst, 2),
-                    "cgst": round(cgst, 2),
-                    "sgst": round(sgst, 2),
-                    "cess": 0,
-                    "flag": "N"
-                }
-            ]
+            "clttx": [{
+                "etin": data["etin"],
+                "suppval": round(data["summary"]["total_taxable"], 2),
+                "igst": round(data["summary"]["total_igst"], 2),
+                "cgst": round(data["summary"]["total_cgst"], 2),
+                "sgst": round(data["summary"]["total_sgst"], 2),
+                "cess": 0,
+                "flag": "N"
+            }]
         }
 
     # =====================================================
     # DOC ISSUE
     # =====================================================
     def build_doc_issue(self, data):
-        sections = []
+        blocks = []
 
-        # -------------------------
-        # Invoices
-        # -------------------------
-        invoice_docs = data.get("invoice_docs", [])
-        if invoice_docs:
-            docs = []
-            for i, d in enumerate(invoice_docs, start=1):
-                docs.append({
-                    "num": i,
-                    "from": d["from"],
-                    "to": d["to"],
-                    "totnum": d["totnum"],
-                    "cancel": 0,
-                    "net_issue": d["totnum"]
-                })
+        # invoices
+        inv = self.make_docs(
+            data.get("invoice_docs", []),
+            1,
+            "Invoices for outward supply"
+        )
+        if inv:
+            blocks.append(inv)
 
-            sections.append({
-                "doc_num": 1,
-                "doc_typ": "Invoices for outward supply",
-                "docs": docs
+        # credit
+        cr = self.make_docs(
+            data.get("credit_docs", []),
+            5,
+            "Credit Note"
+        )
+        if cr:
+            blocks.append(cr)
+
+        # debit
+        dr = self.make_docs(
+            data.get("debit_docs", []),
+            4,
+            "Debit Note"
+        )
+        if dr:
+            blocks.append(dr)
+
+        return {"doc_det": blocks}
+
+    # =====================================================
+    # MAKE DOCS
+    # =====================================================
+    def make_docs(self, rows, doc_num, title):
+        if not rows:
+            return None
+
+        docs = []
+
+        for i, d in enumerate(rows, start=1):
+            qty = int(d["totnum"])
+
+            docs.append({
+                "num": i,
+                "from": d["from"],
+                "to": d["to"],
+                "totnum": qty,
+                "cancel": 0,
+                "net_issue": qty
             })
 
-        # -------------------------
-        # Credit Notes
-        # -------------------------
-        credit_docs = data.get("credit_docs", [])
-        if credit_docs:
-            docs = []
-            for i, d in enumerate(credit_docs, start=1):
-                docs.append({
-                    "num": i,
-                    "from": d["from"],
-                    "to": d["to"],
-                    "totnum": d["totnum"],
-                    "cancel": 0,
-                    "net_issue": d["totnum"]
-                })
-
-            sections.append({
-                "doc_num": 5,
-                "doc_typ": "Credit Note",
-                "docs": docs
-            })
-
-        # -------------------------
-        # Debit Notes
-        # -------------------------
-        debit_docs = data.get("debit_docs", [])
-        if debit_docs:
-            docs = []
-            for i, d in enumerate(debit_docs, start=1):
-                docs.append({
-                    "num": i,
-                    "from": d["from"],
-                    "to": d["to"],
-                    "totnum": d["totnum"],
-                    "cancel": 0,
-                    "net_issue": d["totnum"]
-                })
-
-            sections.append({
-                "doc_num": 4,
-                "doc_typ": "Debit Note",
-                "docs": docs
-            })
-
-        return {"doc_det": sections}
+        return {
+            "doc_num": doc_num,
+            "doc_typ": title,
+            "docs": docs
+        }

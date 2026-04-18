@@ -1,318 +1,163 @@
-# parsers.py
-# FINAL PRODUCTION CLONE ENGINE
-# Dynamic + Multi Marketplace + Real Totals + Exact JSON Ready
+# gst_builder.py
+# FINAL MERGE SUPPORT VERSION
 
-import pandas as pd
-from pathlib import Path
-import logging
-from typing import Dict, List, Any
-
-logger = logging.getLogger(__name__)
+from typing import Dict, Any, List
+import hashlib
 
 
-# =========================================================
-# HELPERS
-# =========================================================
-STATE_CODE_MAP = {
-    "andhra pradesh": "37",
-    "arunachal pradesh": "12",
-    "assam": "18",
-    "bihar": "10",
-    "chandigarh": "04",
-    "chhattisgarh": "22",
-    "delhi": "07",
-    "goa": "30",
-    "gujarat": "24",
-    "haryana": "06",
-    "himachal pradesh": "02",
-    "jharkhand": "20",
-    "karnataka": "29",
-    "kerala": "32",
-    "madhya pradesh": "23",
-    "maharashtra": "27",
-    "odisha": "21",
-    "orissa": "21",
-    "punjab": "03",
-    "rajasthan": "08",
-    "tamil nadu": "33",
-    "telangana": "36",
-    "uttar pradesh": "09",
-    "uttarakhand": "05",
-    "west bengal": "19",
-    "jammu & kashmir": "01",
-    "ladakh": "38",
-}
+class GSTBuilder:
 
-ETIN_MAP = {
-    "Meesho": "07AARCM9332R1CQ",
-    "Amazon": "07AAICA3918J1CV",
-    "Flipkart": "07AACCF0683K1CU",
-}
+    # =====================================================
+    # MAIN
+    # =====================================================
+    def build_gstr1(self, parsed_data: Dict[str, Any], gstin: str, period: str):
+        summary = parsed_data["summary"]
 
+        total_taxable = round(summary["total_taxable"], 2)
+        total_igst = round(summary["total_igst"], 2)
+        total_cgst = round(summary["total_cgst"], 2)
+        total_sgst = round(summary["total_sgst"], 2)
 
-def num(v):
-    return pd.to_numeric(v, errors="coerce").fillna(0)
+        json_data = {
+            "gstin": gstin,
+            "fp": period,
+            "version": "GST3.1.6",
+            "hash": self.make_hash(gstin, period, total_taxable),
 
+            "gt": total_taxable,
+            "cur_gt": total_taxable,
 
-def normalize_cols(df):
-    df.columns = (
-        df.columns.astype(str)
-        .str.strip()
-        .str.lower()
-        .str.replace(" ", "_", regex=False)
-        .str.replace("/", "_", regex=False)
-        .str.replace("(", "", regex=False)
-        .str.replace(")", "", regex=False)
-        .str.replace("-", "_", regex=False)
-    )
-    return df
-
-
-def state_to_code(v):
-    if pd.isna(v):
-        return "00"
-    s = str(v).strip().lower()
-    if s in STATE_CODE_MAP:
-        return STATE_CODE_MAP[s]
-    if len(s) == 2 and s.isdigit():
-        return s
-    return "00"
-
-
-def build_summary(df):
-    if df.empty:
-        return {
-            "rows": [],
-            "total_taxable": 0.0,
-            "total_igst": 0.0,
-            "total_cgst": 0.0,
-            "total_sgst": 0.0,
+            "b2cs": self.build_b2cs(summary["rows"]),
+            "supeco": self.build_supeco(parsed_data),
+            "doc_issue": self.build_doc_issue(parsed_data)
         }
 
-    g = (
-        df.groupby("pos", as_index=False)[
-            ["taxable_value", "igst", "cgst", "sgst"]
-        ]
-        .sum()
-        .round(2)
-    )
+        return json_data
 
-    rows = g.to_dict("records")
+    # =====================================================
+    # HASH
+    # =====================================================
+    def make_hash(self, gstin, period, amount):
+        raw = f"{gstin}{period}{amount}"
+        return hashlib.md5(raw.encode()).hexdigest()
 
-    return {
-        "rows": rows,
-        "total_taxable": float(g["taxable_value"].sum()),
-        "total_igst": float(g["igst"].sum()),
-        "total_cgst": float(g["cgst"].sum()),
-        "total_sgst": float(g["sgst"].sum()),
-    }
+    # =====================================================
+    # B2CS
+    # =====================================================
+    def build_b2cs(self, rows: List[Dict]):
+        out = []
 
+        for r in rows:
+            pos = str(r["pos"]).zfill(2)
 
-# =========================================================
-# BASE
-# =========================================================
-class BaseParser:
-    def parse_files(self, files: List[str]) -> Dict[str, Any]:
-        raise NotImplementedError
+            tx = round(r["taxable_value"], 2)
+            ig = round(r["igst"], 2)
+            cg = round(r["cgst"], 2)
+            sg = round(r["sgst"], 2)
 
-
-# =========================================================
-# MEESHO
-# =========================================================
-class MeeshoParser(BaseParser):
-
-    def parse_files(self, files):
-        sales_frames = []
-        invoice_docs = []
-        credit_docs = []
-
-        for f in files:
-            name = Path(f).name.lower()
-
-            if "tax_invoice" in name:
-                df = pd.read_excel(f)
-                invoice_docs = self.extract_doc_range(df)
-
-            elif "return" in name:
-                df = pd.read_excel(f)
-                df = normalize_cols(df)
-
-                taxable_col = self.find_col(df, [
-                    "total_taxable_sale_value",
-                    "taxable_value",
-                ])
-                tax_col = self.find_col(df, [
-                    "tax_amount",
-                    "igst",
-                ])
-                state_col = self.find_col(df, [
-                    "end_customer_state_new",
-                    "state",
-                ])
-
-                x = pd.DataFrame()
-                x["taxable_value"] = -num(df[taxable_col])
-                x["igst"] = -num(df[tax_col])
-                x["cgst"] = 0
-                x["sgst"] = 0
-                x["pos"] = df[state_col].apply(state_to_code)
-
-                sales_frames.append(x)
-                credit_docs = self.extract_doc_range(df)
-
+            if pos == "07":
+                out.append({
+                    "sply_ty": "INTRA",
+                    "rt": 3,
+                    "typ": "OE",
+                    "pos": pos,
+                    "txval": tx,
+                    "camt": cg,
+                    "samt": sg,
+                    "csamt": 0
+                })
             else:
-                df = pd.read_excel(f)
-                df = normalize_cols(df)
+                out.append({
+                    "sply_ty": "INTER",
+                    "rt": 3,
+                    "typ": "OE",
+                    "pos": pos,
+                    "txval": tx,
+                    "iamt": ig,
+                    "csamt": 0
+                })
 
-                if "total_taxable_sale_value" in df.columns:
-                    taxable_col = "total_taxable_sale_value"
-                    tax_col = self.find_col(df, ["tax_amount"])
-                    state_col = self.find_col(df, ["end_customer_state_new"])
+        return out
 
-                    x = pd.DataFrame()
-                    x["taxable_value"] = num(df[taxable_col])
-                    x["igst"] = num(df[tax_col])
-                    x["cgst"] = 0
-                    x["sgst"] = 0
-                    x["pos"] = df[state_col].apply(state_to_code)
+    # =====================================================
+    # SUPECO
+    # =====================================================
+    def build_supeco(self, data):
+        # merged mode
+        if "clttx" in data:
+            return {"clttx": data["clttx"]}
 
-                    sales_frames.append(x)
-
-        final = pd.concat(sales_frames, ignore_index=True) if sales_frames else pd.DataFrame()
-
+        # single mode
         return {
-            "platform": "Meesho",
-            "etin": ETIN_MAP["Meesho"],
-            "summary": build_summary(final),
-            "invoice_docs": invoice_docs,
-            "credit_docs": credit_docs,
-            "debit_docs": []
+            "clttx": [{
+                "etin": data["etin"],
+                "suppval": round(data["summary"]["total_taxable"], 2),
+                "igst": round(data["summary"]["total_igst"], 2),
+                "cgst": round(data["summary"]["total_cgst"], 2),
+                "sgst": round(data["summary"]["total_sgst"], 2),
+                "cess": 0,
+                "flag": "N"
+            }]
         }
 
-    def find_col(self, df, names):
-        for n in names:
-            if n in df.columns:
-                return n
-        raise Exception(f"Column not found from {names}")
+    # =====================================================
+    # DOC ISSUE
+    # =====================================================
+    def build_doc_issue(self, data):
+        blocks = []
 
-    def extract_doc_range(self, df):
-        for col in df.columns:
-            if "invoice" in str(col).lower():
-                vals = df[col].dropna().astype(str).unique()
-                if len(vals):
-                    return [{
-                        "from": min(vals),
-                        "to": max(vals),
-                        "totnum": len(vals)
-                    }]
-        return []
+        # invoices
+        inv = self.make_docs(
+            data.get("invoice_docs", []),
+            1,
+            "Invoices for outward supply"
+        )
+        if inv:
+            blocks.append(inv)
 
+        # credit
+        cr = self.make_docs(
+            data.get("credit_docs", []),
+            5,
+            "Credit Note"
+        )
+        if cr:
+            blocks.append(cr)
 
-# =========================================================
-# FLIPKART
-# =========================================================
-class FlipkartParser(BaseParser):
+        # debit
+        dr = self.make_docs(
+            data.get("debit_docs", []),
+            4,
+            "Debit Note"
+        )
+        if dr:
+            blocks.append(dr)
 
-    def parse_files(self, files):
-        frames = []
-        docs = []
-        credits = []
+        return {"doc_det": blocks}
 
-        for f in files:
-            try:
-                xl = pd.ExcelFile(f)
-            except:
-                continue
+    # =====================================================
+    # MAKE DOCS
+    # =====================================================
+    def make_docs(self, rows, doc_num, title):
+        if not rows:
+            return None
 
-            for sheet in xl.sheet_names:
-                if "sales" in sheet.lower():
-                    df = pd.read_excel(f, sheet_name=sheet)
-                    df = normalize_cols(df)
-
-                    if "taxable_value_final_invoice_amount__taxes" not in df.columns:
-                        continue
-
-                    x = pd.DataFrame()
-                    x["taxable_value"] = num(df["taxable_value_final_invoice_amount__taxes"])
-                    x["igst"] = num(df.get("igst_amount", 0))
-                    x["cgst"] = num(df.get("cgst_amount", 0))
-                    x["sgst"] = num(df.get("sgst_amount_or_utgst_as_applicable", 0))
-                    x["pos"] = df["customers_delivery_state"].apply(state_to_code)
-
-                    frames.append(x)
-
-                    if "buyer_invoice_id" in df.columns:
-                        vals = df["buyer_invoice_id"].dropna().astype(str).unique()
-                        if len(vals):
-                            docs = [{
-                                "from": min(vals),
-                                "to": max(vals),
-                                "totnum": len(vals)
-                            }]
-
-        final = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
-
-        return {
-            "platform": "Flipkart",
-            "etin": ETIN_MAP["Flipkart"],
-            "summary": build_summary(final),
-            "invoice_docs": docs,
-            "credit_docs": credits,
-            "debit_docs": []
-        }
-
-
-# =========================================================
-# AMAZON
-# =========================================================
-class AmazonParser(BaseParser):
-
-    def parse_files(self, files):
-        frames = []
         docs = []
 
-        for f in files:
-            try:
-                if str(f).lower().endswith(".csv"):
-                    df = pd.read_csv(f, encoding="utf-8", low_memory=False)
-                else:
-                    df = pd.read_excel(f)
-            except:
-                try:
-                    df = pd.read_csv(f, encoding="latin1", low_memory=False)
-                except:
-                    continue
+        for i, d in enumerate(rows, start=1):
+            qty = int(d["totnum"])
 
-            df = normalize_cols(df)
-
-            if "tax_exclusive_gross" not in df.columns:
-                continue
-
-            x = pd.DataFrame()
-            x["taxable_value"] = num(df["tax_exclusive_gross"])
-            x["igst"] = num(df.get("igst_tax", 0))
-            x["cgst"] = num(df.get("cgst_tax", 0))
-            x["sgst"] = num(df.get("sgst_tax", 0))
-            x["pos"] = df["ship_to_state"].apply(state_to_code)
-
-            frames.append(x)
-
-            if "invoice_number" in df.columns:
-                vals = df["invoice_number"].dropna().astype(str).unique()
-                if len(vals):
-                    docs = [{
-                        "from": min(vals),
-                        "to": max(vals),
-                        "totnum": len(vals)
-                    }]
-
-        final = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+            docs.append({
+                "num": i,
+                "from": d["from"],
+                "to": d["to"],
+                "totnum": qty,
+                "cancel": 0,
+                "net_issue": qty
+            })
 
         return {
-            "platform": "Amazon",
-            "etin": ETIN_MAP["Amazon"],
-            "summary": build_summary(final),
-            "invoice_docs": docs,
-            "credit_docs": [],
-            "debit_docs": []
+            "doc_num": doc_num,
+            "doc_typ": title,
+            "docs": docs
         }
