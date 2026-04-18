@@ -1,5 +1,6 @@
 # ui.py
-# FINAL STABLE UI
+# UPDATED FINAL STABLE UI
+# Better progress + no freeze feeling + reset states
 
 import json
 from pathlib import Path
@@ -38,7 +39,9 @@ class MainWindow(QMainWindow):
 
         title = QLabel("GST JSON Generator Pro")
         title.setAlignment(Qt.AlignCenter)
-        title.setStyleSheet("font-size:28px;font-weight:700;padding:10px;")
+        title.setStyleSheet(
+            "font-size:28px;font-weight:700;padding:10px;"
+        )
         root.addWidget(title)
 
         # controls
@@ -81,7 +84,7 @@ class MainWindow(QMainWindow):
 
         root.addLayout(btns)
 
-        # list
+        # file list
         self.list_files = QListWidget()
         root.addWidget(self.list_files)
 
@@ -91,7 +94,7 @@ class MainWindow(QMainWindow):
         self.btn_generate.clicked.connect(self.generate)
 
         self.btn_generate.setStyleSheet("""
-            QPushButton{
+            QPushButton {
                 background:#0a84ff;
                 color:white;
                 font-size:18px;
@@ -99,12 +102,17 @@ class MainWindow(QMainWindow):
                 border:none;
                 border-radius:8px;
             }
+            QPushButton:disabled {
+                background:#8ab8ff;
+            }
         """)
 
         root.addWidget(self.btn_generate)
 
         # progress
         self.progress = QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.setValue(0)
         root.addWidget(self.progress)
 
         # logs
@@ -116,6 +124,12 @@ class MainWindow(QMainWindow):
     def log(self, msg):
         self.logs.append(msg)
 
+    def set_busy(self, busy=True):
+        self.btn_generate.setDisabled(busy)
+        self.btn_add.setDisabled(busy)
+        self.btn_remove.setDisabled(busy)
+        self.btn_clear.setDisabled(busy)
+
     # =====================================================
     def add_files(self):
         files, _ = QFileDialog.getOpenFileNames(
@@ -125,12 +139,15 @@ class MainWindow(QMainWindow):
             "Excel/CSV Files (*.xlsx *.xls *.csv)"
         )
 
+        added = 0
+
         for f in files:
             if f not in self.files:
                 self.files.append(f)
                 self.list_files.addItem(Path(f).name)
+                added += 1
 
-        self.log(f"{len(files)} file(s) added")
+        self.log(f"{added} file(s) added")
 
     def remove_selected(self):
         rows = sorted(
@@ -142,9 +159,13 @@ class MainWindow(QMainWindow):
             self.list_files.takeItem(r)
             self.files.pop(r)
 
+        self.log("Selected file(s) removed")
+
     def clear_all(self):
         self.files.clear()
         self.list_files.clear()
+        self.progress.setValue(0)
+        self.log("All files cleared")
 
     # =====================================================
     def generate(self):
@@ -152,24 +173,38 @@ class MainWindow(QMainWindow):
         period = self.period.text().strip()
         mode = self.mode.currentText()
 
-        self.progress.setValue(10)
-
         ok, errors = run_full_validation(gstin, period, self.files)
+
         if not ok:
-            QMessageBox.warning(self, "Validation Error", "\n".join(errors))
+            QMessageBox.warning(
+                self,
+                "Validation Error",
+                "\n".join(errors)
+            )
             return
 
         try:
+            self.set_busy(True)
+            self.progress.setValue(5)
+            self.log("Validation passed")
+
             self.log("Reading files...")
-            self.progress.setValue(30)
+            self.progress.setValue(20)
 
             parser = self.parsers[mode]
             parsed = parser.parse_files(self.files)
 
-            self.log("Building JSON...")
-            self.progress.setValue(75)
+            self.log("Files parsed successfully")
+            self.progress.setValue(70)
 
-            output = self.builder.build_gstr1(parsed, gstin, period)
+            self.log("Building JSON...")
+            output = self.builder.build_gstr1(
+                parsed,
+                gstin,
+                period
+            )
+
+            self.progress.setValue(85)
 
             save_name = f"GSTR1_{mode}_{period}.json"
 
@@ -180,20 +215,38 @@ class MainWindow(QMainWindow):
                 "JSON Files (*.json)"
             )
 
-            if path:
-                with open(path, "w", encoding="utf-8") as f:
-                    json.dump(output, f, indent=2, ensure_ascii=False)
+            if not path:
+                self.progress.setValue(0)
+                self.log("Save cancelled")
+                self.set_busy(False)
+                return
 
-                self.progress.setValue(100)
-                self.log("Done")
-
-                QMessageBox.information(
-                    self,
-                    "Success",
-                    "GST JSON Generated Successfully"
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(
+                    output,
+                    f,
+                    indent=2,
+                    ensure_ascii=False
                 )
+
+            self.progress.setValue(100)
+            self.log("Done")
+
+            QMessageBox.information(
+                self,
+                "Success",
+                "GST JSON Generated Successfully"
+            )
 
         except Exception as e:
             self.progress.setValue(0)
-            self.log(str(e))
-            QMessageBox.critical(self, "Error", str(e))
+            self.log(f"Error: {str(e)}")
+
+            QMessageBox.critical(
+                self,
+                "Error",
+                str(e)
+            )
+
+        finally:
+            self.set_busy(False)
