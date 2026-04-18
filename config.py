@@ -26,8 +26,9 @@ class Config:
             "max_rows": 100000,
             "chunk_size": 5000
         },
-        "gst": {
+"gst": {
             "default_tax_rate": 3.0,
+            "flipkart_value_mode": "AUTO",
             "igst_states": ["non-delhi"],
             "cgst_rate": 1.5,
             "sgst_rate": 1.5,
