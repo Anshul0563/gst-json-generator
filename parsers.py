@@ -224,3 +224,106 @@ class AmazonParser(BaseParser):
             "credit_docs": [],
             "debit_docs": []
         }
+
+# =====================================================
+# AUTO MERGE PARSER
+# =====================================================
+class AutoMergeParser(BaseParser):
+
+    def __init__(self):
+        self.parsers = [
+            MeeshoParser(),
+            FlipkartParser(),
+            AmazonParser()
+        ]
+
+    def parse_files(self, files):
+        results = []
+
+        for parser in self.parsers:
+            try:
+                data = parser.parse_files(files)
+
+                s = data["summary"]
+                total = (
+                    s["total_taxable"] +
+                    s["total_igst"] +
+                    s["total_cgst"] +
+                    s["total_sgst"]
+                )
+
+                if total != 0:
+                    results.append(data)
+
+            except:
+                pass
+
+        if not results:
+            raise Exception("No valid marketplace data found")
+
+        return self.merge(results)
+
+    def merge(self, results):
+        state_map = {}
+        clttx = []
+        invoice_docs = []
+        credit_docs = []
+        debit_docs = []
+
+        total_taxable = 0
+        total_igst = 0
+        total_cgst = 0
+        total_sgst = 0
+
+        for item in results:
+            s = item["summary"]
+
+            total_taxable += s["total_taxable"]
+            total_igst += s["total_igst"]
+            total_cgst += s["total_cgst"]
+            total_sgst += s["total_sgst"]
+
+            invoice_docs.extend(item.get("invoice_docs", []))
+            credit_docs.extend(item.get("credit_docs", []))
+            debit_docs.extend(item.get("debit_docs", []))
+
+            clttx.append({
+                "etin": item["etin"],
+                "suppval": round(s["total_taxable"], 2),
+                "igst": round(s["total_igst"], 2),
+                "cgst": round(s["total_cgst"], 2),
+                "sgst": round(s["total_sgst"], 2),
+                "cess": 0,
+                "flag": "N"
+            })
+
+            for row in s["rows"]:
+                pos = row["pos"]
+
+                if pos not in state_map:
+                    state_map[pos] = {
+                        "pos": pos,
+                        "taxable_value": 0,
+                        "igst": 0,
+                        "cgst": 0,
+                        "sgst": 0
+                    }
+
+                state_map[pos]["taxable_value"] += row["taxable_value"]
+                state_map[pos]["igst"] += row["igst"]
+                state_map[pos]["cgst"] += row["cgst"]
+                state_map[pos]["sgst"] += row["sgst"]
+
+        return {
+            "summary": {
+                "rows": list(state_map.values()),
+                "total_taxable": round(total_taxable, 2),
+                "total_igst": round(total_igst, 2),
+                "total_cgst": round(total_cgst, 2),
+                "total_sgst": round(total_sgst, 2),
+            },
+            "invoice_docs": invoice_docs,
+            "credit_docs": credit_docs,
+            "debit_docs": debit_docs,
+            "clttx": clttx
+        }
