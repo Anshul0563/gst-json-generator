@@ -1,7 +1,5 @@
 # parsers.py
-# FULL REBUILD FINAL
-# FIXED MEESHO LOGIC
-# JSON template output unchanged
+# FULL UPDATED FINAL VERSION (LAST 1% PATCH INCLUDED)
 
 import pandas as pd
 from pathlib import Path
@@ -95,12 +93,6 @@ class BaseParser:
 
 
 # =====================================================
-# MEESHO FIXED
-# ONLY:
-# tcs_sales.xlsx = sales
-# tcs_sales_return.xlsx = negative returns
-# Tax_invoice_details.xlsx = docs only
-# =====================================================
 class MeeshoParser(BaseParser):
 
     def parse_files(self, files):
@@ -130,19 +122,24 @@ class MeeshoParser(BaseParser):
 
         frames = []
 
-        # sales +
+        # SALES +
         s = sales_df.copy()
         s.columns = [str(c).lower().strip() for c in s.columns]
 
         temp = pd.DataFrame()
         temp["pos"] = s["end_customer_state_new"].apply(state_to_code)
         temp["taxable_value"] = num(s["total_taxable_sale_value"])
-        temp["igst"] = num(s["tax_amount"])
-        temp["cgst"] = 0
-        temp["sgst"] = 0
+
+        tax_amt = num(s["tax_amount"])
+        is_delhi = temp["pos"] == "07"
+
+        temp["igst"] = tax_amt.where(~is_delhi, 0)
+        temp["cgst"] = (tax_amt / 2).where(is_delhi, 0)
+        temp["sgst"] = (tax_amt / 2).where(is_delhi, 0)
+
         frames.append(temp)
 
-        # returns -
+        # RETURNS -
         if return_df is not None:
             r = return_df.copy()
             r.columns = [str(c).lower().strip() for c in r.columns]
@@ -150,9 +147,14 @@ class MeeshoParser(BaseParser):
             temp = pd.DataFrame()
             temp["pos"] = r["end_customer_state_new"].apply(state_to_code)
             temp["taxable_value"] = -num(r["total_taxable_sale_value"])
-            temp["igst"] = -num(r["tax_amount"])
-            temp["cgst"] = 0
-            temp["sgst"] = 0
+
+            tax_amt = num(r["tax_amount"])
+            is_delhi = temp["pos"] == "07"
+
+            temp["igst"] = -(tax_amt.where(~is_delhi, 0))
+            temp["cgst"] = -((tax_amt / 2).where(is_delhi, 0))
+            temp["sgst"] = -((tax_amt / 2).where(is_delhi, 0))
+
             frames.append(temp)
 
         final = pd.concat(frames, ignore_index=True)
@@ -163,7 +165,7 @@ class MeeshoParser(BaseParser):
         if invoice_df is not None:
             invoice_df.columns = [str(c).strip() for c in invoice_df.columns]
 
-            if "Invoice No." in invoice_df.columns:
+            if "Invoice No." in invoice_df.columns and "Type" in invoice_df.columns:
                 inv = invoice_df[
                     invoice_df["Type"].astype(str).str.upper() == "INVOICE"
                 ]["Invoice No."]
@@ -202,6 +204,7 @@ class FlipkartParser(BaseParser):
                     continue
 
                 df = pd.read_excel(file, sheet_name=sheet)
+
                 df.columns = [
                     str(c).lower().strip()
                     .replace(" ", "_")
@@ -210,6 +213,7 @@ class FlipkartParser(BaseParser):
                     .replace(")", "")
                     for c in df.columns
                 ]
+
                 cols = df.columns.tolist()
 
                 state_col = next((c for c in cols if "delivery_state" in c), None)
