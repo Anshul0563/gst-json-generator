@@ -1,5 +1,5 @@
 # parsers.py
-# LONG TERM V1 - PART 1
+# LONG TERM V1 - SANITIZED / UPDATED FINAL
 
 import pandas as pd
 from pathlib import Path
@@ -39,6 +39,14 @@ def build_tax(raw, pos, taxable_col):
         igst = num(raw[igst_col]) if igst_col else 0
         cgst = num(raw[cgst_col]) if cgst_col else 0
         sgst = num(raw[sgst_col]) if sgst_col else 0
+
+        # sanity check
+        total_tax = igst + cgst + sgst
+        suspicious = total_tax > taxable
+
+        if suspicious.any():
+            return (taxable, *calculate_tax_from_taxable(pos, taxable))
+
         return taxable, igst, cgst, sgst
 
     return (taxable, *calculate_tax_from_taxable(pos, taxable))
@@ -63,7 +71,7 @@ class MeeshoParser(BaseParser):
 
             try:
                 df = pd.read_excel(file)
-            except:
+            except Exception:
                 continue
 
             raw = clean_cols(df)
@@ -92,7 +100,6 @@ class MeeshoParser(BaseParser):
             temp["igst"] = ig
             temp["cgst"] = cg
             temp["sgst"] = sg
-
             temp["invoice_no"] = raw[inv_col].astype(str) if inv_col else ""
             temp["order_id"] = ""
             temp["txn_type"] = "sale"
@@ -122,9 +129,7 @@ class MeeshoParser(BaseParser):
             "credit_docs": credit_docs,
             "debit_docs": []
         }
-    # parsers.py
-# LONG TERM V1 - PART 2
-# Add below MeeshoParser
+
 
 # =====================================================
 # FLIPKART
@@ -143,13 +148,21 @@ class FlipkartParser(BaseParser):
 
             try:
                 xls = pd.ExcelFile(file)
-            except:
+            except Exception:
                 continue
 
-            for sheet in xls.sheet_names:
+            target_sheets = [
+                s for s in xls.sheet_names
+                if any(k in s.lower() for k in ["sales", "report", "gstr"])
+            ]
+
+            if not target_sheets:
+                target_sheets = xls.sheet_names[:1]
+
+            for sheet in target_sheets:
                 try:
                     df = pd.read_excel(file, sheet_name=sheet)
-                except:
+                except Exception:
                     continue
 
                 raw = clean_cols(df)
@@ -172,7 +185,6 @@ class FlipkartParser(BaseParser):
                 temp["igst"] = ig
                 temp["cgst"] = cg
                 temp["sgst"] = sg
-
                 temp["invoice_no"] = raw[inv_col].astype(str) if inv_col else ""
                 temp["order_id"] = ""
                 temp["txn_type"] = "sale"
@@ -214,11 +226,11 @@ class AmazonParser(BaseParser):
                 if ext == ".csv":
                     try:
                         df = pd.read_csv(file, encoding="utf-8")
-                    except:
+                    except Exception:
                         df = pd.read_csv(file, encoding="latin1")
                 else:
                     df = pd.read_excel(file)
-            except:
+            except Exception:
                 continue
 
             raw = clean_cols(df)
@@ -241,7 +253,6 @@ class AmazonParser(BaseParser):
             temp["igst"] = ig
             temp["cgst"] = cg
             temp["sgst"] = sg
-
             temp["invoice_no"] = raw[inv_col].astype(str) if inv_col else ""
             temp["order_id"] = ""
             temp["txn_type"] = "sale"
@@ -261,9 +272,7 @@ class AmazonParser(BaseParser):
             "credit_docs": [],
             "debit_docs": []
         }
-    # parsers.py
-# LONG TERM V1 - PART 3
-# Add below AmazonParser
+
 
 # =====================================================
 # AUTO MERGE
@@ -310,10 +319,18 @@ class AutoMergeParser(BaseParser):
 
     def merge(self, results):
         state_map = {}
+
+        invoice_docs = []
+        credit_docs = []
+        debit_docs = []
         clttx = []
 
         for item in results:
             s = item["summary"]
+
+            invoice_docs.extend(item.get("invoice_docs", []))
+            credit_docs.extend(item.get("credit_docs", []))
+            debit_docs.extend(item.get("debit_docs", []))
 
             clttx.append({
                 "etin": item["etin"],
@@ -352,8 +369,8 @@ class AutoMergeParser(BaseParser):
                 "total_cgst": round(sum(r["cgst"] for r in rows), 2),
                 "total_sgst": round(sum(r["sgst"] for r in rows), 2),
             },
-            "invoice_docs": [],
-            "credit_docs": [],
-            "debit_docs": [],
+            "invoice_docs": invoice_docs,
+            "credit_docs": credit_docs,
+            "debit_docs": debit_docs,
             "clttx": clttx
         }
