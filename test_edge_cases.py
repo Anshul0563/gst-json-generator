@@ -8,6 +8,7 @@ import sys
 import json
 import pandas as pd
 from pathlib import Path
+from uuid import uuid4
 
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -28,10 +29,10 @@ def test_flipkart_random_filenames():
     print("="*70)
     
     filenames = [
-        'flipkart_data_2024.csv',
-        'FK_SALES_JANUARY.csv',
-        'flipkart-export-2024-01.csv',
-        'FLIPKART_RAW_DATA.csv',
+        f'{uuid4().hex[:10]}.csv',
+        f'report_{uuid4().hex[:8]}.csv',
+        f'jan_{uuid4().hex[:8]}_sales.csv',
+        f'data_{uuid4().hex[:12]}.csv',
     ]
     
     data = {
@@ -52,7 +53,6 @@ def test_flipkart_random_filenames():
         created_files.append(str(filepath))
         print(f"  Created: {filename}")
     
-    # Test with first file
     parser = FlipkartParser()
     result = parser.parse_files(created_files)
     
@@ -60,11 +60,29 @@ def test_flipkart_random_filenames():
         print("❌ FAILED: Parser returned None")
         return False
     
+    expected_taxable = 13000.0
+    expected_igst = 240.0
+    expected_cgst = 75.0
+    expected_sgst = 75.0
+    expected_invoices = 2
+
     print(f"✅ Parser detected and processed files")
     print(f"  Total Taxable: ₹{result['summary']['total_taxable']:.2f}")
-    print(f"  Total Tax: ₹{result['summary']['total_igst']:.2f}")
+    print(
+        "  Tax Split: "
+        f"IGST=₹{result['summary']['total_igst']:.2f}, "
+        f"CGST=₹{result['summary']['total_cgst']:.2f}, "
+        f"SGST=₹{result['summary']['total_sgst']:.2f}"
+    )
+    print(f"  Invoice docs: {len(result.get('invoice_docs', []))}")
     
-    return result['summary']['total_taxable'] > 0
+    return (
+        result['summary']['total_taxable'] == expected_taxable and
+        result['summary']['total_igst'] == expected_igst and
+        result['summary']['total_cgst'] == expected_cgst and
+        result['summary']['total_sgst'] == expected_sgst and
+        len(result.get('invoice_docs', [])) == expected_invoices
+    )
 
 def test_missing_optional_columns():
     """Test parsers with missing optional columns."""

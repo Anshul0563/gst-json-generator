@@ -171,16 +171,17 @@ def test_meesho_parser():
     result = parser.parse_files([str(meesho_sales), str(meesho_returns)])
     
     # Expected: 2 states (Delhi=07, Maharashtra=27, Karnataka=29, Gujarat=24)
-    # Delhi: 1000 + 1500 + 500(return) = 2000 taxable for sales, -500 for returns
-    # Maharashtra: 2000 + 1000(return) = 2000 taxable for sales, -1000 for returns
-    # Karnataka: 3000 taxable
-    # Gujarat: 2500 taxable
+    # Returns now reconcile against sales inside summary totals.
+    # Delhi: 1000 + 1500 - 500 = 2000
+    # Maharashtra: 2000 - 1000 = 1000
+    # Karnataka: 3000
+    # Gujarat: 2500
     
     expected = {
-        'total_taxable': 1000 + 2000 + 3000 + 1500 + 2500,  # 10000 (sales)
-        'total_igst': 0 + 60 + 90 + 0 + 75,  # 225 (sales)
-        'total_cgst': 15 + 0 + 0 + 22.5 + 0,  # 37.5 (sales)
-        'total_sgst': 15 + 0 + 0 + 22.5 + 0,  # 37.5 (sales)
+        'total_taxable': 8500,
+        'total_igst': 195,
+        'total_cgst': 30,
+        'total_sgst': 30,
     }
     
     passed = validate_parser_output(result, "MEESHO", expected)
@@ -259,10 +260,10 @@ def test_automerge_parser():
     result = parser.parse_files(files)
     
     # Total across all
-    total_taxable = (1000 + 2000 + 3000 + 1500 + 2500) + (5000 + 10000 + 7500) + (2000 + 3000 + 4000 + 2500)
-    total_igst = (0 + 60 + 90 + 0 + 75) + (150 + 300 + 225) + (60 + 90 + 120 + 75)
-    total_cgst = (15 + 0 + 0 + 22.5 + 0) + 0 + 0
-    total_sgst = (15 + 0 + 0 + 22.5 + 0) + 0 + 0
+    total_taxable = 8500 + (5000 + 10000 + 7500) + (2000 + 3000 + 4000 + 2500)
+    total_igst = 195 + (150 + 300 + 225) + (60 + 90 + 120 + 75)
+    total_cgst = 30
+    total_sgst = 30
     
     expected = {
         'total_taxable': total_taxable,

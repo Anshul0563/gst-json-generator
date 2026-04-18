@@ -8,18 +8,18 @@ class SupplyTypeCalculator:
     """Strategy pattern for supply type calculation."""
     
     @staticmethod
-    def calculate(pos: str) -> Tuple[str, Dict[str, float]]:
+    def calculate(pos: str, seller_state_code: str = "") -> Tuple[str, Dict[str, float]]:
         """Calculate supply type and tax split for a position."""
         from config import get_config
         config = get_config()
         
         pos_str = str(pos).zfill(2)
+        seller_pos = str(seller_state_code).zfill(2) if seller_state_code else ""
         tax_rate = config.get('gst.default_tax_rate', 3.0)
         cgst_rate = config.get('gst.cgst_rate', 1.5)
         sgst_rate = config.get('gst.sgst_rate', 1.5)
         
-        # Delhi is INTRA state
-        if pos_str == "07":
+        if seller_pos and pos_str == seller_pos:
             return "INTRA", {
                 "cgst_rate": cgst_rate,
                 "sgst_rate": sgst_rate,
@@ -36,8 +36,9 @@ class SupplyTypeCalculator:
 class B2CSItemBuilder:
     """Builder pattern for B2CS items."""
     
-    def __init__(self, row: Dict[str, Any]):
+    def __init__(self, row: Dict[str, Any], seller_state_code: str = ""):
         self.row = row
+        self.seller_state_code = seller_state_code
         self.pos = str(row.get("pos", "")).zfill(2)
         self.txval = round(float(row.get("taxable_value", 0)), 2)
         self.igst = round(float(row.get("igst", 0)), 2)
@@ -46,7 +47,7 @@ class B2CSItemBuilder:
     
     def build(self) -> Dict[str, Any]:
         """Build B2CS item."""
-        sply_type, tax_info = SupplyTypeCalculator.calculate(self.pos)
+        sply_type, tax_info = SupplyTypeCalculator.calculate(self.pos, self.seller_state_code)
         
         from config import get_config
         config = get_config()
@@ -81,32 +82,39 @@ class GSTBuilder:
     def __init__(self):
         """Initialize builder."""
         self.version = "GST3.1.6"
+
+    def _extract_state_code(self, gstin: str, parsed_data: Dict) -> str:
+        """Resolve seller state code from GSTIN first, then parsed fallback."""
+        gstin_str = str(gstin).strip().upper()
+        if len(gstin_str) >= 2 and gstin_str[:2].isdigit():
+            return gstin_str[:2]
+        parsed_state = parsed_data.get("seller_state_code", "")
+        return str(parsed_state).zfill(2) if parsed_state else ""
     
     def build_gstr1(self, parsed_data: Dict, gstin: str, period: str) -> Dict[str, Any]:
         """Build complete GSTR1 JSON."""
         summary = parsed_data.get("summary", {})
+        seller_state_code = self._extract_state_code(gstin, parsed_data)
         
         return {
             "gstin": gstin.upper(),
             "fp": period,
             "version": self.version,
             "hash": "hash",
-            "b2cs": self._build_b2cs(summary.get("rows", [])),
+            "b2cs": self._build_b2cs(summary.get("rows", []), seller_state_code),
             "supeco": {
                 "clttx": parsed_data.get("clttx", [])
             },
-            "doc_issue": {
-                "doc_det": []
-            },
+            "doc_issue": parsed_data.get("doc_issue", {"doc_det": []}),
             "summary": self._build_summary(summary)
         }
     
-    def _build_b2cs(self, rows: List[Dict]) -> List[Dict]:
+    def _build_b2cs(self, rows: List[Dict], seller_state_code: str) -> List[Dict]:
         """Build B2CS (Business to Consumer Supply) items."""
         items = []
         
         for row in rows:
-            builder = B2CSItemBuilder(row)
+            builder = B2CSItemBuilder(row, seller_state_code)
             
             if not builder.is_valid():
                 continue

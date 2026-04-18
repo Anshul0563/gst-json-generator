@@ -1,0 +1,33 @@
+REAL FILE RECONCILIATION REPORT
+
+Source files:
+- /home/jarvis/Downloads/ff45918f-be5f-44ed-afe1-d5a2d2fd8fa0_1776001211000.xlsx
+- /home/jarvis/Downloads/MTR_B2C-MARCH-2026-A1YGIWFZR88S6S.csv
+- /home/jarvis/Downloads/Tax_invoice_details.xlsx
+- /home/jarvis/Downloads/tcs_sales.xlsx
+- /home/jarvis/Downloads/tcs_sales_return.xlsx
+
+Matched anchor POS values:
+- POS 07: expected 679.60, actual 679.60, match=True
+- POS 09: expected 2211.99, actual 2211.99, match=True
+- POS 22: expected 691.26, actual 691.26, match=True
+- POS 33: expected 1889.31, actual 1889.31, match=True
+- POS 37: expected 1306.79, actual 1306.79, match=True
+
+Summary totals:
+- total_taxable: 16577.98
+- total_igst: 476.99
+- total_cgst: 10.20
+- total_sgst: 10.20
+
+Supplier rows (CLTTX):
+- 07AACCF0683K1CU: suppval=2653.73, igst=76.66, cgst=1.49, sgst=1.49
+- 07AAICA3918J1CV: suppval=975.71, igst=29.29, cgst=0.00, sgst=0.00
+- 07AARCM9332R1CQ: suppval=12948.54, igst=371.04, cgst=8.71, sgst=8.71
+
+doc_issue buckets:
+- doc_num=1 doc_typ=Invoices for outward supply ranges=5
+- doc_num=5 doc_typ=Credit Note ranges=9
+- doc_num=6 doc_typ=Debit Note ranges=2
+
+Overall anchor match: True

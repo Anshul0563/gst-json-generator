@@ -140,6 +140,12 @@ class MainWindow(QMainWindow):
         self.logs.setReadOnly(True)
         root.addWidget(self.logs)
 
+        # reconciliation dashboard
+        self.reconciliation = QTextEdit()
+        self.reconciliation.setReadOnly(True)
+        self.reconciliation.setPlaceholderText("Reconciliation dashboard will appear here after generation.")
+        root.addWidget(self.reconciliation)
+
     # =====================================================
     def refresh_ui(self):
         QCoreApplication.processEvents()
@@ -195,7 +201,45 @@ class MainWindow(QMainWindow):
         self.files.clear()
         self.list_files.clear()
         self.set_progress(0)
+        self.reconciliation.clear()
         self.log("✅ All files cleared")
+
+    def update_reconciliation(self, parsed, output):
+        """Render a reconciliation summary for the generated result."""
+        summary = parsed.get('summary', {})
+        rows = summary.get('rows', [])
+        credit_docs = parsed.get('credit_docs', [])
+        total_returns = round(sum(float(doc.get('txval', 0)) for doc in credit_docs), 2)
+        total_tax = round(
+            float(summary.get('total_igst', 0)) +
+            float(summary.get('total_cgst', 0)) +
+            float(summary.get('total_sgst', 0)),
+            2
+        )
+
+        lines = [
+            "Reconciliation Dashboard",
+            f"Total Taxable: {summary.get('total_taxable', 0):.2f}",
+            f"Total Tax: {total_tax:.2f}",
+            f"Returns: {total_returns:.2f}",
+            "",
+            "State-wise Totals",
+        ]
+
+        if rows:
+            for row in rows:
+                lines.append(
+                    f"POS {row.get('pos', '')}: "
+                    f"Taxable={row.get('taxable_value', 0):.2f}, "
+                    f"IGST={row.get('igst', 0):.2f}, "
+                    f"CGST={row.get('cgst', 0):.2f}, "
+                    f"SGST={row.get('sgst', 0):.2f}"
+                )
+        else:
+            lines.append("No state totals available")
+
+        self.reconciliation.setPlainText("\n".join(lines))
+        self.refresh_ui()
 
     # =====================================================
     def generate(self):
@@ -227,7 +271,7 @@ class MainWindow(QMainWindow):
             parser = self.parsers[mode]
 
             self.set_progress(25)
-            parsed = parser.parse_files(self.files)
+            parsed = parser.parse_files(self.files, seller_gstin=gstin)
 
             if not parsed:
                 raise ValueError("No data parsed from files")
@@ -248,6 +292,7 @@ class MainWindow(QMainWindow):
                 raise ValueError(f"Output validation failed: {', '.join(errors)}")
 
             self.log("✓ JSON built and validated")
+            self.update_reconciliation(parsed, output)
             self.set_progress(85)
 
             # Determine export formats
