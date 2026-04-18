@@ -768,6 +768,7 @@ class BaseParser:
         returns_df = final[final['txn_type'] == 'return'].copy()
         
         # Aggregate net by POS so returns reconcile against sales.
+        # Remove zero-net rows: if taxable_value == 0 AND all taxes == 0, exclude from b2cs summary
         summary_rows = []
         if not final.empty:
             grouped = final.groupby('pos', as_index=False).agg({
@@ -776,6 +777,7 @@ class BaseParser:
                 'cgst': 'sum',
                 'sgst': 'sum'
             }).round(2)
+            # Filter out zero-net rows
             grouped = grouped[
                 (grouped['taxable_value'] != 0) |
                 (grouped['igst'] != 0) |
@@ -968,52 +970,57 @@ class FlipkartParser(BaseParser):
                 if path.suffix.lower() in {'.xlsx', '.xls'}:
                     xl = pd.ExcelFile(file)
                     if 'Sales Report' in xl.sheet_names:
-                        sales_df = pd.read_excel(file, sheet_name='Sales Report')
-                        cleaned = clean_cols(sales_df)
+                        sales_raw = pd.read_excel(file, sheet_name='Sales Report')
+                        cleaned = clean_cols(sales_raw)
                         
-                        # Filter only true sales events
+                        # Filter only true sales events: Event Type == SALE AND Event Sub Type == SALE
                         event_type_col = find_col(cleaned.columns.tolist(), ['event_type'])
                         event_subtype_col = find_col(cleaned.columns.tolist(), ['event_sub_type'])
                         
-                        if event_type_col and event_subtype_col:
-                            sales_df = cleaned[
-                                (cleaned[event_type_col].astype(str).str.strip().str.upper() == 'SALE') &
-                                (cleaned[event_subtype_col].astype(str).str.strip().str.upper() == 'SALE')
+                        sales_df = cleaned.copy()
+                        if event_type_col:
+                            sales_df = sales_df[
+                                sales_df[event_type_col].astype(str).str.strip().str.upper() == 'SALE'
                             ].copy()
-                            logger.info(f"Filtered Sales Report to {len(sales_df)} true sales rows")
+                        if event_subtype_col:
+                            sales_df = sales_df[
+                                sales_df[event_subtype_col].astype(str).str.strip().str.upper() == 'SALE'
+                            ].copy()
                         
-                        invoice_col = find_col(cleaned.columns.tolist(), ['buyer_invoice_id'])
-                        order_col = find_col(cleaned.columns.tolist(), ['order_id'])
-                        state_col = find_col(cleaned.columns.tolist(), ["customer's_delivery_state", 'customer_delivery_state'])
-                        taxable_col = find_col(cleaned.columns.tolist(), ['taxable_value_final_invoice_amount_taxes', 'taxable_value_final_invoice_amount_taxe', 'taxable_value'])
-                        invoice_amount_col = find_col(cleaned.columns.tolist(), ['buyer_invoice_amount'])
-                        igst_col = find_col(cleaned.columns.tolist(), ['igst_amount'])
-                        cgst_col = find_col(cleaned.columns.tolist(), ['cgst_amount'])
-                        sgst_col = find_col(cleaned.columns.tolist(), ['sgst_amount_or_utgst_as_applicable'])
+                        logger.info(f"Filtered Sales Report to {len(sales_df)} true sale rows (Event Type=SALE, Sub Type=SALE)")
+                        
+                        invoice_col = find_col(cleaned.columns.tolist(), ['buyer_invoice_id', 'invoice_id', 'invoice'])
+                        order_col = find_col(cleaned.columns.tolist(), ['order_id', 'order_no'])
+                        state_col = find_col(cleaned.columns.tolist(), ["customer's_delivery_state", 'customer_delivery_state', 'delivery_state'])
+                        
+                        # Use exact taxable_value column - NOT invoice amount
+                        taxable_col = find_col(cleaned.columns.tolist(), ['taxable_value_final_invoice_amount_taxes', 'taxable_value_final_invoice_amount_taxe', 'taxable_value', 'final_invoice_amount', 'net_amount'])
+                        
+                        igst_col = find_col(cleaned.columns.tolist(), ['igst_amount', 'igst'])
+                        cgst_col = find_col(cleaned.columns.tolist(), ['cgst_amount', 'cgst'])
+                        sgst_col = find_col(cleaned.columns.tolist(), ['sgst_amount_or_utgst_as_applicable', 'sgst_amount', 'sgst', 'utgst'])
                         
                         if not all([state_col, taxable_col]):
-                            logger.warning(f"Missing key columns in Sales Report")
+                            logger.warning(f"Missing state_col={state_col} or taxable_col={taxable_col} in Sales Report")
                             continue
                             
                         if sales_df.empty:
-                            logger.warning("No sales rows after filtering")
+                            logger.warning("No sales rows after filtering to Event Type=SALE, Sub Type=SALE")
                             continue
-                        logger.info(f"Using filtered {len(sales_df)} sales rows")
+                        
                         records = []
-                        invoice_numbers = {'sale': [], 'return': []}
-                        taxable_total = 0.0
-                        invoice_total = 0.0
                         for idx, row in sales_df.iterrows():
                             pos = get_state_code(row.get(state_col))
                             if pd.isna(pos):
                                 continue
+                            
                             taxable_value = safe_num(row.get(taxable_col))
-                            invoice_value = safe_num(row.get(invoice_amount_col, taxable_value))
-                            igst = safe_num(row.get(igst_col))
-                            cgst = safe_num(row.get(cgst_col))
-                            sgst = safe_num(row.get(sgst_col))
-                            txn_type = 'sale'  # Already filtered to sales
+                            igst = safe_num(row.get(igst_col)) if igst_col else 0.0
+                            cgst = safe_num(row.get(cgst_col)) if cgst_col else 0.0
+                            sgst = safe_num(row.get(sgst_col)) if sgst_col else 0.0
+                            
                             invoice_no = clean_invoice_no(row.get(invoice_col)) or clean_invoice_no(row.get(order_col)) or f"SALES_{idx}"
+                            
                             record = {
                                 'platform': self.PLATFORM,
                                 'invoice_no': invoice_no,
@@ -1022,66 +1029,58 @@ class FlipkartParser(BaseParser):
                                 'igst': igst,
                                 'cgst': cgst,
                                 'sgst': sgst,
-                                'txn_type': txn_type,
+                                'txn_type': 'sale',
                                 'source_key': f"{Path(file).name}:sales:{idx}",
                             }
-                            taxable_total += taxable_value
-                            invoice_total += invoice_value
+                            
                             if has_financial_values(record):
                                 records.append(record)
-                                invoice_numbers[txn_type].append(invoice_no)
-                        
-                        logger.info(f"Sales: taxable={taxable_total:.2f} invoice={invoice_total:.2f}")
+                                self.record_document_numbers('invoice', [invoice_no])
                         
                         if records:
                             normalized_sales = make_preparsed_df(records, self.PLATFORM)
                             dfs.append((normalized_sales, file))
-                            self.record_document_numbers('invoice', invoice_numbers['sale'])
-                            self.record_document_numbers('credit', invoice_numbers['return'])
-                            logger.info(f"Processed {len(records)} sales records")
+                            logger.info(f"Processed {len(records)} sales records from Sales Report")
 
+                        # Process Cash Back Report for credit notes (returns)
                         if 'Cash Back Report' in xl.sheet_names:
-                            cash_df = pd.read_excel(file, sheet_name='Cash Back Report')
-                            cash_cleaned = clean_cols(cash_df)
+                            cash_raw = pd.read_excel(file, sheet_name='Cash Back Report')
+                            cash_cleaned = clean_cols(cash_raw)
                             
-                            # Filter credit notes only
-                            doc_type_col = find_col(cash_cleaned.columns.tolist(), ['document_type'])
+                            # Filter ONLY credit notes (Document Type contains CREDIT)
+                            doc_type_col = find_col(cash_cleaned.columns.tolist(), ['document_type', 'doc_type'])
+                            
+                            cash_df = cash_cleaned.copy()
                             if doc_type_col:
-                                cash_df = cash_cleaned[
-                                    cash_cleaned[doc_type_col].astype(str).str.strip().str.upper().str.contains('CREDIT')
+                                cash_df = cash_df[
+                                    cash_df[doc_type_col].astype(str).str.strip().str.upper().str.contains('CREDIT', na=False)
                                 ].copy()
-                                logger.info(f"Filtered Cash Back to {len(cash_df)} credit notes")
+                                logger.info(f"Filtered Cash Back Report to {len(cash_df)} credit note rows")
                             
-                            cash_invoice_col = find_col(cash_cleaned.columns.tolist(), ['credit_note_id', 'debit_note_id'])
-                            cash_state_col = find_col(cash_cleaned.columns.tolist(), ["customer's_delivery_state", 'customer_delivery_state'])
-                            cash_taxable_col = find_col(cash_cleaned.columns.tolist(), ['taxable_value'])
-                            cash_invoice_amount_col = find_col(cash_cleaned.columns.tolist(), ['invoice_amount'])
-                            cash_igst_col = find_col(cash_cleaned.columns.tolist(), ['igst_amount'])
-                            cash_cgst_col = find_col(cash_cleaned.columns.tolist(), ['cgst_amount'])
-                            cash_sgst_col = find_col(cash_cleaned.columns.tolist(), ['sgst_amount_or_utgst_as_applicable'])
+                            cash_invoice_col = find_col(cash_cleaned.columns.tolist(), ['credit_note_id', 'note_id', 'id'])
+                            cash_state_col = find_col(cash_cleaned.columns.tolist(), ["customer's_delivery_state", 'customer_delivery_state', 'delivery_state'])
+                            cash_taxable_col = find_col(cash_cleaned.columns.tolist(), ['taxable_value', 'net_amount', 'amount'])
+                            cash_igst_col = find_col(cash_cleaned.columns.tolist(), ['igst_amount', 'igst'])
+                            cash_cgst_col = find_col(cash_cleaned.columns.tolist(), ['cgst_amount', 'cgst'])
+                            cash_sgst_col = find_col(cash_cleaned.columns.tolist(), ['sgst_amount_or_utgst_as_applicable', 'sgst_amount', 'sgst', 'utgst'])
                             
                             if not all([cash_state_col, cash_taxable_col]):
-                                logger.warning(f"Missing key columns in Cash Back Report")
+                                logger.warning(f"Missing cash state_col={cash_state_col} or cash taxable_col={cash_taxable_col}")
                                 continue
                             
-                            if cash_df.empty:
-                                logger.info("No cashback credit notes found")
-                            else:
-                                logger.info(f"Using filtered {len(cash_df)} cashback credit notes")
+                            if not cash_df.empty:
                                 cash_records = []
-                                taxable_total = 0.0
-                                invoice_total = 0.0
                                 for idx, row in cash_df.iterrows():
                                     pos = get_state_code(row.get(cash_state_col))
                                     if pd.isna(pos):
                                         continue
-                                    taxable_value = safe_num(row.get(cash_taxable_col))
-                                    invoice_value = safe_num(row.get(cash_invoice_amount_col, taxable_value))
-                                    igst = safe_num(row.get(cash_igst_col))
-                                    cgst = safe_num(row.get(cash_cgst_col))
-                                    sgst = safe_num(row.get(cash_sgst_col))
                                     
-                                    # Credit notes are always returns - negate values
+                                    taxable_value = safe_num(row.get(cash_taxable_col))
+                                    igst = safe_num(row.get(cash_igst_col)) if cash_igst_col else 0.0
+                                    cgst = safe_num(row.get(cash_cgst_col)) if cash_cgst_col else 0.0
+                                    sgst = safe_num(row.get(cash_sgst_col)) if cash_sgst_col else 0.0
+                                    
+                                    # Credit notes are returns - negate values
                                     record = {
                                         'platform': self.PLATFORM,
                                         'invoice_no': clean_invoice_no(row.get(cash_invoice_col)) or f"CASHBACK_{idx}",
@@ -1093,19 +1092,18 @@ class FlipkartParser(BaseParser):
                                         'txn_type': 'return',
                                         'source_key': f"{Path(file).name}:cashback:{idx}",
                                     }
-                                    taxable_total += abs(taxable_value)
-                                    invoice_total += abs(invoice_value)
+                                    
                                     if has_financial_values(record):
                                         cash_records.append(record)
                                         self.record_document_numbers('credit', [record['invoice_no']])
                                 
-                                logger.info(f"Returns: taxable={taxable_total:.2f} invoice={invoice_total:.2f}")
-                                logger.info(f"Net taxable={taxable_total - invoice_total:.2f} invoice={invoice_total - taxable_total:.2f}")
-                            
-                            if cash_records:
-                                normalized_cashback = make_preparsed_df(cash_records, self.PLATFORM)
-                                dfs.append((normalized_cashback, file + '#cashback'))
-                                logger.info(f"Processed {len(cash_records)} cashback returns")
+                                if cash_records:
+                                    normalized_cashback = make_preparsed_df(cash_records, self.PLATFORM)
+                                    dfs.append((normalized_cashback, file + '#cashback'))
+                                    logger.info(f"Processed {len(cash_records)} cashback credit notes")
+                            else:
+                                logger.info("No cashback credit notes found")
+                        
                         logger.info(f"Adapted {file} using Flipkart Sales/Cashback template")
                         continue
 
