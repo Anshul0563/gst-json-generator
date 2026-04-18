@@ -2,7 +2,7 @@
 
 Status: IMPLEMENTING
 
-## Completed: ✅ Pending: ❌
+## Steps to Complete (Approved Plan):
 
 ### Phase 1: Analysis ✅
 - ✅ Read Feb raw Excel content/structure
@@ -16,8 +16,8 @@ Status: IMPLEMENTING
 
 ### Phase 3: Patch ✅
 - ✅ Update FlipkartParser.read_files()
-- ✅ Filter Event Type/Sub Type == 'Sale'
-- ✅ Cashback: Document Type='Credit Note' → return/negate  
+- ✅ Filter Event Type/Sub Type == 'Sale' → use filtered sales_df.iterrows()
+- ✅ Cashback: Document Type='Credit Note' → use filtered cash_df.iterrows()  
 - ✅ Ensure zero-tax rows if taxes>0
 
 ### Phase 4: Tests ⏳
@@ -26,8 +26,9 @@ Status: IMPLEMENTING
 - ⏳ test_validation.py full run
 
 ### Phase 5: Verify ⏳
-- ⏳ Feb proof results
+- ⏳ Feb proof results vs accepted JSON (txval=3727.18 total)
 - ⏳ March proof results  
 - ⏳ Future-proof confirmation
 
-Current: Editing parsers.py → Testing
+**Current Step 1/7**: Editing parsers.py → Fix filtered df usage in loops
+

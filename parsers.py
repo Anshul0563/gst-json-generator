@@ -996,33 +996,37 @@ class FlipkartParser(BaseParser):
                             logger.warning(f"Missing key columns in Sales Report")
                             continue
                             
+                        if sales_df.empty:
+                            logger.warning("No sales rows after filtering")
+                            continue
+                        logger.info(f"Using filtered {len(sales_df)} sales rows")
                         records = []
                         invoice_numbers = {'sale': [], 'return': []}
-                        for idx, row in cleaned.iterrows():
-                            pos = get_state_code(row.get(state_col))
-                            if pd.isna(pos):
-                                continue
-                            taxable_value = safe_num(row.get(taxable_col))
-                            igst = safe_num(row.get(igst_col))
-                            cgst = safe_num(row.get(cgst_col))
-                            sgst = safe_num(row.get(sgst_col))
-                            event_type = str(row.get('event_type', '')).strip().lower()
-                            txn_type = 'return' if event_type == 'return' else 'sale'
-                            invoice_no = clean_invoice_no(row.get(invoice_col)) or clean_invoice_no(row.get(order_col)) or f"SALES_{idx}"
-                            record = {
-                                'platform': self.PLATFORM,
-                                'invoice_no': invoice_no,
-                                'pos': pos,
-                                'taxable_value': taxable_value,
-                                'igst': igst,
-                                'cgst': cgst,
-                                'sgst': sgst,
-                                'txn_type': txn_type,
-                                'source_key': f"{Path(file).name}:sales:{idx}",
-                            }
-                            if has_financial_values(record):
-                                records.append(record)
-                                invoice_numbers[txn_type].append(invoice_no)
+                        for idx, row in sales_df.iterrows():
+                                pos = get_state_code(row.get(state_col))
+                                if pd.isna(pos):
+                                    continue
+                                taxable_value = safe_num(row.get(taxable_col))
+                                igst = safe_num(row.get(igst_col))
+                                cgst = safe_num(row.get(cgst_col))
+                                sgst = safe_num(row.get(sgst_col))
+                                event_type = str(row.get('event_type', '')).strip().lower()
+                                txn_type = 'sale'  # Already filtered to sales
+                                invoice_no = clean_invoice_no(row.get(invoice_col)) or clean_invoice_no(row.get(order_col)) or f"SALES_{idx}"
+                                record = {
+                                    'platform': self.PLATFORM,
+                                    'invoice_no': invoice_no,
+                                    'pos': pos,
+                                    'taxable_value': taxable_value,
+                                    'igst': igst,
+                                    'cgst': cgst,
+                                    'sgst': sgst,
+                                    'txn_type': txn_type,
+                                    'source_key': f"{Path(file).name}:sales:{idx}",
+                                }
+                                if has_financial_values(record):
+                                    records.append(record)
+                                    invoice_numbers[txn_type].append(invoice_no)
                         
                         if records:
                             normalized_sales = make_preparsed_df(records, self.PLATFORM)
@@ -1054,31 +1058,35 @@ class FlipkartParser(BaseParser):
                                 logger.warning(f"Missing key columns in Cash Back Report")
                                 continue
                             
-                            cash_records = []
-                            for idx, row in cash_cleaned.iterrows():
-                                pos = get_state_code(row.get(cash_state_col))
-                                if pd.isna(pos):
-                                    continue
-                                taxable_value = safe_num(row.get(cash_taxable_col))
-                                igst = safe_num(row.get(cash_igst_col))
-                                cgst = safe_num(row.get(cash_cgst_col))
-                                sgst = safe_num(row.get(cash_sgst_col))
-                                
-                                # Credit notes are always returns - negate values
-                                record = {
-                                    'platform': self.PLATFORM,
-                                    'invoice_no': clean_invoice_no(row.get(cash_invoice_col)) or f"CASHBACK_{idx}",
-                                    'pos': pos,
-                                    'taxable_value': -abs(taxable_value),
-                                    'igst': -abs(igst),
-                                    'cgst': -abs(cgst),
-                                    'sgst': -abs(sgst),
-                                    'txn_type': 'return',
-                                    'source_key': f"{Path(file).name}:cashback:{idx}",
-                                }
-                                if has_financial_values(record):
-                                    cash_records.append(record)
-                                    self.record_document_numbers('credit', [record['invoice_no']])
+                            if cash_df.empty:
+                                logger.info("No cashback credit notes found")
+                            else:
+                                logger.info(f"Using filtered {len(cash_df)} cashback credit notes")
+                                cash_records = []
+                                for idx, row in cash_df.iterrows():
+                                    pos = get_state_code(row.get(cash_state_col))
+                                    if pd.isna(pos):
+                                        continue
+                                    taxable_value = safe_num(row.get(cash_taxable_col))
+                                    igst = safe_num(row.get(cash_igst_col))
+                                    cgst = safe_num(row.get(cash_cgst_col))
+                                    sgst = safe_num(row.get(cash_sgst_col))
+                                    
+                                    # Credit notes are always returns - negate values
+                                    record = {
+                                        'platform': self.PLATFORM,
+                                        'invoice_no': clean_invoice_no(row.get(cash_invoice_col)) or f"CASHBACK_{idx}",
+                                        'pos': pos,
+                                        'taxable_value': -abs(taxable_value),
+                                        'igst': -abs(igst),
+                                        'cgst': -abs(cgst),
+                                        'sgst': -abs(sgst),
+                                        'txn_type': 'return',
+                                        'source_key': f"{Path(file).name}:cashback:{idx}",
+                                    }
+                                    if has_financial_values(record):
+                                        cash_records.append(record)
+                                        self.record_document_numbers('credit', [record['invoice_no']])
                             
                             if cash_records:
                                 normalized_cashback = make_preparsed_df(cash_records, self.PLATFORM)
