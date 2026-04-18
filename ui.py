@@ -216,4 +216,4 @@ class MainWindow(QMainWindow):
 
     def log(self, text):
         self.logs.append(text)
-        self.statusBar().showMessage(text)
+        self.statusBar().showMessage(text) 
