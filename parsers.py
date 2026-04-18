@@ -1,5 +1,5 @@
 # parsers.py
-# LONG TERM V1 - SANITIZED / UPDATED FINAL
+# FULL UPDATED CODE - V1.1 DUPLICATE FIX
 
 import pandas as pd
 from pathlib import Path
@@ -40,7 +40,6 @@ def build_tax(raw, pos, taxable_col):
         cgst = num(raw[cgst_col]) if cgst_col else 0
         sgst = num(raw[sgst_col]) if sgst_col else 0
 
-        # sanity check
         total_tax = igst + cgst + sgst
         suspicious = total_tax > taxable
 
@@ -50,6 +49,32 @@ def build_tax(raw, pos, taxable_col):
         return taxable, igst, cgst, sgst
 
     return (taxable, *calculate_tax_from_taxable(pos, taxable))
+
+
+# =====================================================
+# DUPLICATE CLEANER
+# =====================================================
+def append_clean(rows, temp):
+    temp = temp.copy()
+
+    temp = temp[
+        temp["pos"].notna() |
+        (temp["taxable_value"] != 0)
+    ]
+
+    dedupe_cols = [
+        "platform",
+        "pos",
+        "invoice_no",
+        "taxable_value",
+        "igst",
+        "cgst",
+        "sgst",
+        "txn_type"
+    ]
+
+    temp = temp.drop_duplicates(subset=dedupe_cols, keep="first")
+    rows.append(temp)
 
 
 # =====================================================
@@ -81,7 +106,6 @@ class MeeshoParser(BaseParser):
             taxable_col = first_match(cols, ["taxable"])
             inv_col = first_match(cols, ["invoice"])
 
-            # docs only file
             if "invoice" in name and taxable_col is None:
                 if inv_col:
                     invoice_docs.extend(safe_docs(raw[inv_col]))
@@ -114,7 +138,7 @@ class MeeshoParser(BaseParser):
                 if inv_col:
                     credit_docs.extend(safe_docs(raw[inv_col]))
 
-            rows.append(temp)
+            append_clean(rows, temp)
 
         if not rows:
             raise Exception("No valid Meesho files found")
@@ -151,45 +175,51 @@ class FlipkartParser(BaseParser):
             except Exception:
                 continue
 
-            target_sheets = [
-                s for s in xls.sheet_names
-                if any(k in s.lower() for k in ["sales", "report", "gstr"])
-            ]
+            target = None
 
-            if not target_sheets:
-                target_sheets = xls.sheet_names[:1]
+            for s in xls.sheet_names:
+                sl = s.lower()
 
-            for sheet in target_sheets:
-                try:
-                    df = pd.read_excel(file, sheet_name=sheet)
-                except Exception:
+                if any(x in sl for x in ["summary", "pivot", "total"]):
                     continue
 
-                raw = clean_cols(df)
-                cols = raw.columns.tolist()
+                if any(k in sl for k in ["sales", "report", "gstr"]):
+                    target = s
+                    break
 
-                state_col = first_match(cols, ["delivery_state", "state"])
-                taxable_col = first_match(cols, ["taxable_value", "taxable"])
-                inv_col = first_match(cols, ["invoice"])
+            if not target:
+                target = xls.sheet_names[0]
 
-                if not state_col or not taxable_col:
-                    continue
+            try:
+                df = pd.read_excel(file, sheet_name=target)
+            except Exception:
+                continue
 
-                temp = pd.DataFrame()
-                temp["platform"] = "Flipkart"
-                temp["pos"] = raw[state_col].apply(state_to_code)
+            raw = clean_cols(df)
+            cols = raw.columns.tolist()
 
-                tx, ig, cg, sg = build_tax(raw, temp["pos"], taxable_col)
+            state_col = first_match(cols, ["delivery_state", "state"])
+            taxable_col = first_match(cols, ["taxable_value", "taxable"])
+            inv_col = first_match(cols, ["invoice"])
 
-                temp["taxable_value"] = tx
-                temp["igst"] = ig
-                temp["cgst"] = cg
-                temp["sgst"] = sg
-                temp["invoice_no"] = raw[inv_col].astype(str) if inv_col else ""
-                temp["order_id"] = ""
-                temp["txn_type"] = "sale"
+            if not state_col or not taxable_col:
+                continue
 
-                rows.append(temp)
+            temp = pd.DataFrame()
+            temp["platform"] = "Flipkart"
+            temp["pos"] = raw[state_col].apply(state_to_code)
+
+            tx, ig, cg, sg = build_tax(raw, temp["pos"], taxable_col)
+
+            temp["taxable_value"] = tx
+            temp["igst"] = ig
+            temp["cgst"] = cg
+            temp["sgst"] = sg
+            temp["invoice_no"] = raw[inv_col].astype(str) if inv_col else ""
+            temp["order_id"] = ""
+            temp["txn_type"] = "sale"
+
+            append_clean(rows, temp)
 
         if not rows:
             raise Exception("No valid Flipkart files found")
@@ -257,7 +287,7 @@ class AmazonParser(BaseParser):
             temp["order_id"] = ""
             temp["txn_type"] = "sale"
 
-            rows.append(temp)
+            append_clean(rows, temp)
 
         if not rows:
             raise Exception("No valid Amazon files found")
@@ -292,8 +322,8 @@ class AutoMergeParser(BaseParser):
         for parser in self.parsers:
             try:
                 data = parser.parse_files(files)
-
                 s = data["summary"]
+
                 total = (
                     s["total_taxable"] +
                     s["total_igst"] +
@@ -305,9 +335,7 @@ class AutoMergeParser(BaseParser):
                     results.append(data)
 
             except Exception as e:
-                errors.append(
-                    f"{parser.__class__.__name__}: {str(e)}"
-                )
+                errors.append(f"{parser.__class__.__name__}: {str(e)}")
 
         if not results:
             raise Exception(
