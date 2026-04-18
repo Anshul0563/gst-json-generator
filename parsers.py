@@ -1,163 +1,294 @@
-# gst_builder.py
-# FINAL MERGE SUPPORT VERSION
+# parsers.py
+# FINAL WORKING VERSION (AUTO DETECT + MERGE COMPATIBLE)
 
-from typing import Dict, Any, List
-import hashlib
+import pandas as pd
+from pathlib import Path
 
 
-class GSTBuilder:
+# =====================================================
+# HELPERS
+# =====================================================
+def num(series):
+    return pd.to_numeric(series, errors="coerce").fillna(0)
 
-    # =====================================================
-    # MAIN
-    # =====================================================
-    def build_gstr1(self, parsed_data: Dict[str, Any], gstin: str, period: str):
-        summary = parsed_data["summary"]
 
-        total_taxable = round(summary["total_taxable"], 2)
-        total_igst = round(summary["total_igst"], 2)
-        total_cgst = round(summary["total_cgst"], 2)
-        total_sgst = round(summary["total_sgst"], 2)
+STATE_CODES = {
+    "jammu and kashmir": "01",
+    "himachal pradesh": "02",
+    "punjab": "03",
+    "chandigarh": "04",
+    "uttarakhand": "05",
+    "haryana": "06",
+    "delhi": "07",
+    "rajasthan": "08",
+    "uttar pradesh": "09",
+    "bihar": "10",
+    "sikkim": "11",
+    "arunachal pradesh": "12",
+    "nagaland": "13",
+    "manipur": "14",
+    "mizoram": "15",
+    "tripura": "16",
+    "meghalaya": "17",
+    "assam": "18",
+    "west bengal": "19",
+    "jharkhand": "20",
+    "odisha": "21",
+    "chhattisgarh": "22",
+    "madhya pradesh": "23",
+    "gujarat": "24",
+    "maharashtra": "27",
+    "karnataka": "29",
+    "goa": "30",
+    "kerala": "32",
+    "tamil nadu": "33",
+    "puducherry": "34",
+    "telangana": "36",
+    "andhra pradesh": "37",
+    "ladakh": "38",
+}
 
-        json_data = {
-            "gstin": gstin,
-            "fp": period,
-            "version": "GST3.1.6",
-            "hash": self.make_hash(gstin, period, total_taxable),
 
-            "gt": total_taxable,
-            "cur_gt": total_taxable,
+def state_to_code(v):
+    if pd.isna(v):
+        return "00"
 
-            "b2cs": self.build_b2cs(summary["rows"]),
-            "supeco": self.build_supeco(parsed_data),
-            "doc_issue": self.build_doc_issue(parsed_data)
+    s = str(v).strip().lower()
+    return STATE_CODES.get(s, "00")
+
+
+def build_summary(df):
+    if df.empty:
+        return {
+            "rows": [],
+            "total_taxable": 0,
+            "total_igst": 0,
+            "total_cgst": 0,
+            "total_sgst": 0
         }
 
-        return json_data
+    g = (
+        df.groupby("pos", as_index=False)[
+            ["taxable_value", "igst", "cgst", "sgst"]
+        ]
+        .sum()
+        .round(2)
+    )
 
-    # =====================================================
-    # HASH
-    # =====================================================
-    def make_hash(self, gstin, period, amount):
-        raw = f"{gstin}{period}{amount}"
-        return hashlib.md5(raw.encode()).hexdigest()
+    return {
+        "rows": g.to_dict("records"),
+        "total_taxable": float(g["taxable_value"].sum()),
+        "total_igst": float(g["igst"].sum()),
+        "total_cgst": float(g["cgst"].sum()),
+        "total_sgst": float(g["sgst"].sum()),
+    }
 
-    # =====================================================
-    # B2CS
-    # =====================================================
-    def build_b2cs(self, rows: List[Dict]):
-        out = []
 
-        for r in rows:
-            pos = str(r["pos"]).zfill(2)
+# =====================================================
+# BASE
+# =====================================================
+class BaseParser:
+    def parse_files(self, files):
+        raise NotImplementedError
 
-            tx = round(r["taxable_value"], 2)
-            ig = round(r["igst"], 2)
-            cg = round(r["cgst"], 2)
-            sg = round(r["sgst"], 2)
 
-            if pos == "07":
-                out.append({
-                    "sply_ty": "INTRA",
-                    "rt": 3,
-                    "typ": "OE",
-                    "pos": pos,
-                    "txval": tx,
-                    "camt": cg,
-                    "samt": sg,
-                    "csamt": 0
-                })
+# =====================================================
+# MEESHO
+# =====================================================
+class MeeshoParser(BaseParser):
+
+    def parse_files(self, files):
+        frames = []
+
+        for file in files:
+            name = Path(file).name.lower()
+
+            if "meesho" not in name and "tax_invoice" not in name and "tcs" not in name:
+                continue
+
+            try:
+                df = pd.read_excel(file)
+            except:
+                continue
+
+            cols = [str(c).lower().strip() for c in df.columns]
+
+            if "end_customer_state_new" in cols:
+                df.columns = cols
+
+                taxable_col = None
+                for c in cols:
+                    if "taxable" in c:
+                        taxable_col = c
+                        break
+
+                tax_col = None
+                for c in cols:
+                    if "tax_amount" in c or c == "tax":
+                        tax_col = c
+                        break
+
+                if taxable_col is None:
+                    continue
+
+                temp = pd.DataFrame()
+                temp["pos"] = df["end_customer_state_new"].apply(state_to_code)
+                temp["taxable_value"] = num(df[taxable_col])
+                temp["igst"] = num(df[tax_col]) if tax_col else 0
+                temp["cgst"] = 0
+                temp["sgst"] = 0
+
+                frames.append(temp)
+
+        if not frames:
+            raise Exception("No valid Meesho files found")
+
+        final = pd.concat(frames, ignore_index=True)
+
+        return {
+            "platform": "Meesho",
+            "etin": "29AABCM2441G1ZS",
+            "summary": build_summary(final),
+            "invoice_docs": [],
+            "credit_docs": [],
+            "debit_docs": []
+        }
+
+
+# =====================================================
+# FLIPKART
+# =====================================================
+class FlipkartParser(BaseParser):
+
+    def parse_files(self, files):
+        frames = []
+
+        for file in files:
+            try:
+                xls = pd.ExcelFile(file)
+            except:
+                continue
+
+            for sheet in xls.sheet_names:
+                if "sales" not in sheet.lower():
+                    continue
+
+                try:
+                    df = pd.read_excel(file, sheet_name=sheet)
+                except:
+                    continue
+
+                df.columns = [
+                    str(c).lower().strip()
+                    .replace(" ", "_")
+                    .replace("/", "_")
+                    .replace("(", "")
+                    .replace(")", "")
+                    for c in df.columns
+                ]
+
+                cols = df.columns.tolist()
+
+                if "customers_delivery_state" not in cols:
+                    continue
+
+                taxable_col = None
+                for c in cols:
+                    if "taxable_value" in c:
+                        taxable_col = c
+                        break
+
+                if taxable_col is None:
+                    continue
+
+                temp = pd.DataFrame()
+                temp["pos"] = df["customers_delivery_state"].apply(state_to_code)
+                temp["taxable_value"] = num(df[taxable_col])
+                temp["igst"] = num(df["igst_amount"]) if "igst_amount" in cols else 0
+                temp["cgst"] = num(df["cgst_amount"]) if "cgst_amount" in cols else 0
+                temp["sgst"] = num(df["sgst_amount_or_utgst_as_applicable"]) if "sgst_amount_or_utgst_as_applicable" in cols else 0
+
+                frames.append(temp)
+
+        if not frames:
+            raise Exception("No valid Flipkart files found")
+
+        final = pd.concat(frames, ignore_index=True)
+
+        return {
+            "platform": "Flipkart",
+            "etin": "07AAFCN5072P1ZV",
+            "summary": build_summary(final),
+            "invoice_docs": [],
+            "credit_docs": [],
+            "debit_docs": []
+        }
+
+
+# =====================================================
+# AMAZON
+# =====================================================
+class AmazonParser(BaseParser):
+
+    def parse_files(self, files):
+        frames = []
+
+        for file in files:
+            ext = Path(file).suffix.lower()
+
+            # try csv
+            if ext == ".csv":
+                try:
+                    df = pd.read_csv(file, encoding="utf-8")
+                except:
+                    try:
+                        df = pd.read_csv(file, encoding="latin1")
+                    except:
+                        continue
+
+            # try excel
+            elif ext in [".xlsx", ".xls"]:
+                try:
+                    df = pd.read_excel(file)
+                except:
+                    continue
             else:
-                out.append({
-                    "sply_ty": "INTER",
-                    "rt": 3,
-                    "typ": "OE",
-                    "pos": pos,
-                    "txval": tx,
-                    "iamt": ig,
-                    "csamt": 0
-                })
+                continue
 
-        return out
+            df.columns = [
+                str(c).lower().strip()
+                .replace(" ", "_")
+                .replace("/", "_")
+                for c in df.columns
+            ]
 
-    # =====================================================
-    # SUPECO
-    # =====================================================
-    def build_supeco(self, data):
-        # merged mode
-        if "clttx" in data:
-            return {"clttx": data["clttx"]}
+            cols = df.columns.tolist()
 
-        # single mode
-        return {
-            "clttx": [{
-                "etin": data["etin"],
-                "suppval": round(data["summary"]["total_taxable"], 2),
-                "igst": round(data["summary"]["total_igst"], 2),
-                "cgst": round(data["summary"]["total_cgst"], 2),
-                "sgst": round(data["summary"]["total_sgst"], 2),
-                "cess": 0,
-                "flag": "N"
-            }]
-        }
+            if "ship_to_state" not in cols:
+                continue
 
-    # =====================================================
-    # DOC ISSUE
-    # =====================================================
-    def build_doc_issue(self, data):
-        blocks = []
+            if "tax_exclusive_gross" not in cols:
+                continue
 
-        # invoices
-        inv = self.make_docs(
-            data.get("invoice_docs", []),
-            1,
-            "Invoices for outward supply"
-        )
-        if inv:
-            blocks.append(inv)
+            temp = pd.DataFrame()
+            temp["pos"] = df["ship_to_state"].apply(state_to_code)
+            temp["taxable_value"] = num(df["tax_exclusive_gross"])
+            temp["igst"] = num(df["igst_tax"]) if "igst_tax" in cols else 0
+            temp["cgst"] = num(df["cgst_tax"]) if "cgst_tax" in cols else 0
+            temp["sgst"] = num(df["sgst_tax"]) if "sgst_tax" in cols else 0
 
-        # credit
-        cr = self.make_docs(
-            data.get("credit_docs", []),
-            5,
-            "Credit Note"
-        )
-        if cr:
-            blocks.append(cr)
+            frames.append(temp)
 
-        # debit
-        dr = self.make_docs(
-            data.get("debit_docs", []),
-            4,
-            "Debit Note"
-        )
-        if dr:
-            blocks.append(dr)
+        if not frames:
+            raise Exception("No valid Amazon files found")
 
-        return {"doc_det": blocks}
-
-    # =====================================================
-    # MAKE DOCS
-    # =====================================================
-    def make_docs(self, rows, doc_num, title):
-        if not rows:
-            return None
-
-        docs = []
-
-        for i, d in enumerate(rows, start=1):
-            qty = int(d["totnum"])
-
-            docs.append({
-                "num": i,
-                "from": d["from"],
-                "to": d["to"],
-                "totnum": qty,
-                "cancel": 0,
-                "net_issue": qty
-            })
+        final = pd.concat(frames, ignore_index=True)
 
         return {
-            "doc_num": doc_num,
-            "doc_typ": title,
-            "docs": docs
+            "platform": "Amazon",
+            "etin": "07AAICA3918J1CV",
+            "summary": build_summary(final),
+            "invoice_docs": [],
+            "credit_docs": [],
+            "debit_docs": []
         }
