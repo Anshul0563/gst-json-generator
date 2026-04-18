@@ -1,15 +1,21 @@
+# utils.py
+# LONG TERM V1 FOUNDATION
+
 import pandas as pd
+import re
 
 
 STATE_CODES = {
-    "delhi": "07", "new delhi": "07",
     "himachal pradesh": "02",
     "punjab": "03",
     "chandigarh": "04",
     "uttarakhand": "05",
     "haryana": "06",
+    "delhi": "07",
+    "new delhi": "07",
     "rajasthan": "08",
-    "uttar pradesh": "09", "up": "09",
+    "uttar pradesh": "09",
+    "up": "09",
     "bihar": "10",
     "sikkim": "11",
     "arunachal pradesh": "12",
@@ -21,7 +27,8 @@ STATE_CODES = {
     "assam": "18",
     "west bengal": "19",
     "jharkhand": "20",
-    "odisha": "21", "orissa": "21",
+    "odisha": "21",
+    "orissa": "21",
     "chhattisgarh": "22",
     "madhya pradesh": "23",
     "gujarat": "24",
@@ -41,39 +48,56 @@ def num(v):
     return pd.to_numeric(v, errors="coerce").fillna(0)
 
 
+def clean_text(v):
+    if pd.isna(v):
+        return ""
+    return str(v).strip()
+
+
 def clean_cols(df):
     df = df.copy()
     df.columns = [
-        str(c).strip().lower()
-        .replace(" ", "_")
-        .replace("/", "_")
-        .replace("-", "_")
-        .replace("(", "")
-        .replace(")", "")
+        re.sub(r"_+", "_",
+            str(c).strip().lower()
+            .replace(" ", "_")
+            .replace("/", "_")
+            .replace("-", "_")
+            .replace("(", "")
+            .replace(")", "")
+        ).strip("_")
         for c in df.columns
     ]
     return df
 
 
 def state_to_code(v):
-    if pd.isna(v):
-        return None
+    s = clean_text(v).lower()
 
-    s = str(v).strip().lower()
-    s = " ".join(s.split())
+    if not s:
+        return None
 
     if s.isdigit() and len(s) == 2:
         return s
 
+    s = " ".join(s.split())
     return STATE_CODES.get(s)
 
 
 def first_match(columns, keywords):
-    for c in columns:
-        for k in keywords:
-            if k in c:
-                return c
+    for key in keywords:
+        for col in columns:
+            if key in col:
+                return col
     return None
+
+
+def detect_tax_columns(columns):
+    return {
+        "igst": first_match(columns, ["igst"]),
+        "cgst": first_match(columns, ["cgst"]),
+        "sgst": first_match(columns, ["sgst", "utgst"]),
+        "tax": first_match(columns, ["tax_amount", "tax"]),
+    }
 
 
 def safe_docs(series):
@@ -95,11 +119,22 @@ def safe_docs(series):
     }]
 
 
-def remove_duplicates(df):
+def dedupe(df):
     keys = [c for c in ["platform", "invoice_no", "order_id", "txn_type"] if c in df.columns]
-    if not keys:
-        return df
-    return df.drop_duplicates(subset=keys, keep="first")
+    if keys:
+        return df.drop_duplicates(subset=keys, keep="first")
+    return df
+
+
+def calculate_tax_from_taxable(pos_series, taxable_series):
+    taxable = num(taxable_series)
+    is_delhi = pos_series == "07"
+
+    igst = (taxable * 0.03).where(~is_delhi, 0).round(2)
+    cgst = (taxable * 0.015).where(is_delhi, 0).round(2)
+    sgst = (taxable * 0.015).where(is_delhi, 0).round(2)
+
+    return igst, cgst, sgst
 
 
 def summarize(df):
