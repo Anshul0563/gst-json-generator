@@ -1,8 +1,7 @@
-# parsers.py
-# PORTAL FINAL VERSION (CORRECT ETIN + CREDIT/DEBIT SUPPORT)
 
 import pandas as pd
 from pathlib import Path
+import re
 
 
 def num(series):
@@ -57,13 +56,34 @@ def state_to_code(v):
     return STATE_CODES.get(s)
 
 
-def make_docs(series):
-    vals = series.dropna().astype(str).unique().tolist()
+# =====================================================
+# STRICT DOC CLEANING
+# =====================================================
+def clean_doc_value(v):
+    if pd.isna(v):
+        return None
+
+    s = str(v).strip()
+
+    if not s or s.lower() == "nan":
+        return None
+
+    return s
+
+
+def smart_make_docs(series):
+    vals = []
+
+    for x in series.dropna():
+        v = clean_doc_value(x)
+        if not v:
+            continue
+        vals.append(v)
+
+    vals = sorted(list(set(vals)))
 
     if not vals:
         return []
-
-    vals.sort()
 
     return [{
         "from": vals[0],
@@ -72,8 +92,17 @@ def make_docs(series):
     }]
 
 
+# =====================================================
 def build_summary(df):
     df = df[df["pos"].notna()].copy()
+
+    # remove zero rows
+    df = df[
+        (df["taxable_value"] != 0) |
+        (df["igst"] != 0) |
+        (df["cgst"] != 0) |
+        (df["sgst"] != 0)
+    ]
 
     if df.empty:
         return {
@@ -140,15 +169,13 @@ class MeeshoParser(BaseParser):
             temp["igst"] = num(df[tax]) if tax else 0
             temp["cgst"] = 0
             temp["sgst"] = 0
-
             frames.append(temp)
 
             if inv:
-                inv_docs.extend(make_docs(df[inv]))
+                inv_docs.extend(smart_make_docs(df[inv]))
 
-            # returns => credit note
             if "return" in file.lower() and inv:
-                cr_docs.extend(make_docs(df[inv]))
+                cr_docs.extend(smart_make_docs(df[inv]))
 
         if not frames:
             raise Exception("No valid Meesho files found")
@@ -156,7 +183,7 @@ class MeeshoParser(BaseParser):
         return {
             "platform": "Meesho",
             "etin": "07AARCM9332R1CQ",
-            "summary": build_summary(pd.concat(frames)),
+            "summary": build_summary(pd.concat(frames, ignore_index=True)),
             "invoice_docs": inv_docs,
             "credit_docs": cr_docs,
             "debit_docs": []
@@ -180,7 +207,10 @@ class FlipkartParser(BaseParser):
                 if not any(k in sheet.lower() for k in ["sales", "report", "gstr"]):
                     continue
 
-                df = pd.read_excel(file, sheet_name=sheet)
+                try:
+                    df = pd.read_excel(file, sheet_name=sheet)
+                except:
+                    continue
 
                 df.columns = [
                     str(c).lower().strip()
@@ -206,11 +236,10 @@ class FlipkartParser(BaseParser):
                 temp["igst"] = num(df["igst_amount"]) if "igst_amount" in cols else 0
                 temp["cgst"] = num(df["cgst_amount"]) if "cgst_amount" in cols else 0
                 temp["sgst"] = num(df["sgst_amount_or_utgst_as_applicable"]) if "sgst_amount_or_utgst_as_applicable" in cols else 0
-
                 frames.append(temp)
 
                 if inv:
-                    inv_docs.extend(make_docs(df[inv]))
+                    inv_docs.extend(smart_make_docs(df[inv]))
 
         if not frames:
             raise Exception("No valid Flipkart files found")
@@ -218,7 +247,7 @@ class FlipkartParser(BaseParser):
         return {
             "platform": "Flipkart",
             "etin": "07AACCF0683K1CU",
-            "summary": build_summary(pd.concat(frames)),
+            "summary": build_summary(pd.concat(frames, ignore_index=True)),
             "invoice_docs": inv_docs,
             "credit_docs": [],
             "debit_docs": []
@@ -267,15 +296,13 @@ class AmazonParser(BaseParser):
             temp["igst"] = num(df["igst_tax"]) if "igst_tax" in cols else 0
             temp["cgst"] = num(df["cgst_tax"]) if "cgst_tax" in cols else 0
             temp["sgst"] = num(df["sgst_tax"]) if "sgst_tax" in cols else 0
-
             frames.append(temp)
 
             if "invoice_number" in cols:
-                inv_docs.extend(make_docs(df["invoice_number"]))
+                inv_docs.extend(smart_make_docs(df["invoice_number"]))
 
-            # sample style debit note detect
             if "debit_note_number" in cols:
-                dr_docs.extend(make_docs(df["debit_note_number"]))
+                dr_docs.extend(smart_make_docs(df["debit_note_number"]))
 
         if not frames:
             raise Exception("No valid Amazon files found")
@@ -283,7 +310,7 @@ class AmazonParser(BaseParser):
         return {
             "platform": "Amazon",
             "etin": "07AAICA3918J1CV",
-            "summary": build_summary(pd.concat(frames)),
+            "summary": build_summary(pd.concat(frames, ignore_index=True)),
             "invoice_docs": inv_docs,
             "credit_docs": [],
             "debit_docs": dr_docs
