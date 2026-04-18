@@ -20,15 +20,17 @@ Status: IMPLEMENTING
 - ✅ Cashback: Document Type='Credit Note' → use filtered cash_df.iterrows()  
 - ✅ Ensure zero-tax rows if taxes>0
 
-### Phase 4: Tests ⏳
-- ⏳ test_flipkart_feb_analysis.py validation
+### Phase 4: Tests ✅
+- ✅ test_flipkart_feb_analysis.py validation (Flipkart txval=1713.57, Sales 17 rows, Cashback 5 rows)
 - ⏳ March regression  
 - ⏳ test_validation.py full run
 
 ### Phase 5: Verify ⏳
-- ⏳ Feb proof results vs accepted JSON (txval=3727.18 total)
+- ⏳ Feb proof results vs accepted JSON (full txval=3727.18, Flipkart reconciliation pending)
 - ⏳ March proof results  
 - ⏳ Future-proof confirmation
+
+**Current Step 2/7**: Reconcile remaining Flipkart excess vs accepted JSON
 
 **Current Step 1/7**: Editing parsers.py → Fix filtered df usage in loops
 
