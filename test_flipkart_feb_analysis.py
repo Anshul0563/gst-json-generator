@@ -39,7 +39,23 @@ if HAS_PARSER:
         for r in sorted(summary, key=lambda x: x['pos']):
             print(f"  {r['pos']}: txval={r['taxable_value']:.2f} igst={r['igst']:.2f}")
         print(f"Totals: txval={sum(r['taxable_value'] for r in summary):.2f}")
+        
+        # Row-level debug
+        print("\\n=== ROW DEBUG ===")
+        if 'invoice_docs' in result:
+            print(f"Sales docs: {len(result['invoice_docs'])}")
+            for i, doc in enumerate(result['invoice_docs'][:5]):
+                print(f"  Sales {i}: {doc['invoice_no']} pos={doc['pos']} txval={doc['txval']}")
+        if 'credit_docs' in result:
+            print(f"Credit docs: {len(result['credit_docs'])}")
+            for i, doc in enumerate(result['credit_docs'][:5]):
+                print(f"  Credit {i}: {doc['invoice_no']} pos={doc['pos']} txval={doc['txval']}")
+        print(f"ETIN: {result.get('etin')}")
+        print(f"Seller state: {result.get('seller_state_code')}")
     else:
         print("Parser returned None")
+        import traceback
+        traceback.print_exc()
 else:
     print("Skip parser test")
+
