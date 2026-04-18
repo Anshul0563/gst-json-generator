@@ -1,6 +1,6 @@
 # ui.py
-# UPDATED FINAL STABLE UI
-# Better progress + no freeze feeling + reset states
+# FULL SANITIZED FINAL UI
+# Fixed responsiveness + clean logging + safer generate flow
 
 import json
 from pathlib import Path
@@ -11,8 +11,8 @@ from PySide6.QtWidgets import (
     QListWidget, QLineEdit, QTextEdit, QComboBox,
     QProgressBar
 )
+from PySide6.QtCore import Qt, QCoreApplication
 
-from PySide6.QtCore import Qt
 from validators import run_full_validation
 
 
@@ -44,7 +44,7 @@ class MainWindow(QMainWindow):
         )
         root.addWidget(title)
 
-        # controls
+        # top controls
         row = QHBoxLayout()
 
         self.mode = QComboBox()
@@ -88,7 +88,7 @@ class MainWindow(QMainWindow):
         self.list_files = QListWidget()
         root.addWidget(self.list_files)
 
-        # generate
+        # generate button
         self.btn_generate = QPushButton("GENERATE GST JSON")
         self.btn_generate.setMinimumHeight(55)
         self.btn_generate.clicked.connect(self.generate)
@@ -121,14 +121,23 @@ class MainWindow(QMainWindow):
         root.addWidget(self.logs)
 
     # =====================================================
+    def refresh_ui(self):
+        QCoreApplication.processEvents()
+
     def log(self, msg):
         self.logs.append(msg)
+        self.refresh_ui()
+
+    def set_progress(self, value):
+        self.progress.setValue(value)
+        self.refresh_ui()
 
     def set_busy(self, busy=True):
         self.btn_generate.setDisabled(busy)
         self.btn_add.setDisabled(busy)
         self.btn_remove.setDisabled(busy)
         self.btn_clear.setDisabled(busy)
+        self.refresh_ui()
 
     # =====================================================
     def add_files(self):
@@ -164,7 +173,7 @@ class MainWindow(QMainWindow):
     def clear_all(self):
         self.files.clear()
         self.list_files.clear()
-        self.progress.setValue(0)
+        self.set_progress(0)
         self.log("All files cleared")
 
     # =====================================================
@@ -185,17 +194,19 @@ class MainWindow(QMainWindow):
 
         try:
             self.set_busy(True)
-            self.progress.setValue(5)
+            self.logs.clear()
+
             self.log("Validation passed")
+            self.set_progress(10)
 
-            self.log("Reading files...")
-            self.progress.setValue(20)
-
+            self.log("Parsing files...")
             parser = self.parsers[mode]
+
+            self.set_progress(25)
             parsed = parser.parse_files(self.files)
 
             self.log("Files parsed successfully")
-            self.progress.setValue(70)
+            self.set_progress(70)
 
             self.log("Building JSON...")
             output = self.builder.build_gstr1(
@@ -204,7 +215,7 @@ class MainWindow(QMainWindow):
                 period
             )
 
-            self.progress.setValue(85)
+            self.set_progress(85)
 
             save_name = f"GSTR1_{mode}_{period}.json"
 
@@ -216,9 +227,8 @@ class MainWindow(QMainWindow):
             )
 
             if not path:
-                self.progress.setValue(0)
                 self.log("Save cancelled")
-                self.set_busy(False)
+                self.set_progress(0)
                 return
 
             with open(path, "w", encoding="utf-8") as f:
@@ -229,8 +239,8 @@ class MainWindow(QMainWindow):
                     ensure_ascii=False
                 )
 
-            self.progress.setValue(100)
-            self.log("Done")
+            self.set_progress(100)
+            self.log("JSON generated successfully")
 
             QMessageBox.information(
                 self,
@@ -239,7 +249,7 @@ class MainWindow(QMainWindow):
             )
 
         except Exception as e:
-            self.progress.setValue(0)
+            self.set_progress(0)
             self.log(f"Error: {str(e)}")
 
             QMessageBox.critical(
