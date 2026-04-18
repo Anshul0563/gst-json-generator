@@ -1,30 +1,33 @@
 # Flipkart February Business Rule Reverse-Engineering
 
-Status: ACTIVE
+Status: IMPLEMENTING
 
 ## Completed: ✅ Pending: ❌
 
-### Phase 1: Analysis
-- ❌ [ ] Read Feb raw Excel content/structure
-- ❌ [ ] Identify relevant sheets/columns
-- ❌ [ ] Count matching rows vs JSON b2cs (expect ~16+ raw -> 16 agg)
-- ❌ [ ] Run current parser on Feb raw, get output
+### Phase 1: Analysis ✅
+- ✅ Read Feb raw Excel content/structure
+- ✅ Identify relevant sheets/columns  
+- ✅ Count matching rows vs JSON b2cs
+- ✅ Run current parser on Feb raw → 1127.19 baseline
 
-### Phase 2: Rule Detection
-- ❌ [ ] Detect exclusion: cancelled, returns, adjustments, dupes, non-sales
-- ❌ [ ] Map raw rows to JSON b2cs entries (zero/neg inclusion)
+### Phase 2: Rule Detection ✅
+- ✅ Detect exclusion: Event Type != 'Sale', Cashback credits
+- ✅ Map raw → expected logic confirmed
 
-### Phase 3: Patch
-- ❌ [ ] Update FlipkartParser: include zero-txval valid rows
-- ❌ [ ] Add cancelled/typ filters if present
-- ❌ [ ] Ensure neg/returns preserved
+### Phase 3: Patch ⏳
+- ⏳ Update FlipkartParser.read_files()
+- ⏳ Filter Event Type/Sub Type == 'Sale'
+- ⏳ Cashback: Document Type='Credit Note' → return/negate
+- ⏳ Ensure zero-tax rows if taxes>0
 
-### Phase 4: Tests
-- ❌ [ ] test_validation.py: feb_accuracy, march_regression
-- ❌ [ ] Mini Feb sample data
+### Phase 4: Tests ⏳
+- ⏳ test_flipkart_feb_analysis.py validation
+- ⏳ March regression  
+- ⏳ test_validation.py full run
 
-### Phase 5: Verify
-- ❌ [ ] Run tests
-- ❌ [ ] Future-proof (no month hardcode)
+### Phase 5: Verify ⏳
+- ⏳ Feb proof results
+- ⏳ March proof results  
+- ⏳ Future-proof confirmation
 
-Current: Step 1
+Current: Editing parsers.py → Testing

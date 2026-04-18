@@ -972,6 +972,18 @@ class FlipkartParser(BaseParser):
                     if 'Sales Report' in xl.sheet_names:
                         sales_df = pd.read_excel(file, sheet_name='Sales Report')
                         cleaned = clean_cols(sales_df)
+                        
+                        # Filter only true sales events
+                        event_type_col = find_col(cleaned.columns.tolist(), ['event_type'])
+                        event_subtype_col = find_col(cleaned.columns.tolist(), ['event_sub_type'])
+                        
+                        if event_type_col and event_subtype_col:
+                            sales_df = cleaned[
+                                (cleaned[event_type_col].astype(str).str.strip().str.upper() == 'SALE') &
+                                (cleaned[event_subtype_col].astype(str).str.strip().str.upper() == 'SALE')
+                            ].copy()
+                            logger.info(f"Filtered Sales Report to {len(sales_df)} true sales rows")
+                        
                         invoice_col = find_col(cleaned.columns.tolist(), ['buyer_invoice_id'])
                         order_col = find_col(cleaned.columns.tolist(), ['order_id'])
                         state_col = find_col(cleaned.columns.tolist(), ["customer's_delivery_state", 'customer_delivery_state'])
@@ -979,17 +991,24 @@ class FlipkartParser(BaseParser):
                         igst_col = find_col(cleaned.columns.tolist(), ['igst_amount'])
                         cgst_col = find_col(cleaned.columns.tolist(), ['cgst_amount'])
                         sgst_col = find_col(cleaned.columns.tolist(), ['sgst_amount_or_utgst_as_applicable'])
+                        
+                        if not all([state_col, taxable_col]):
+                            logger.warning(f"Missing key columns in Sales Report")
+                            continue
+                            
                         records = []
                         invoice_numbers = {'sale': [], 'return': []}
                         for idx, row in cleaned.iterrows():
                             pos = get_state_code(row.get(state_col))
+                            if pd.isna(pos):
+                                continue
                             taxable_value = safe_num(row.get(taxable_col))
                             igst = safe_num(row.get(igst_col))
                             cgst = safe_num(row.get(cgst_col))
                             sgst = safe_num(row.get(sgst_col))
                             event_type = str(row.get('event_type', '')).strip().lower()
                             txn_type = 'return' if event_type == 'return' else 'sale'
-                            invoice_no = clean_invoice_no(row.get(invoice_col)) or clean_invoice_no(row.get(order_col)) or str(row.name)
+                            invoice_no = clean_invoice_no(row.get(invoice_col)) or clean_invoice_no(row.get(order_col)) or f"SALES_{idx}"
                             record = {
                                 'platform': self.PLATFORM,
                                 'invoice_no': invoice_no,
@@ -1004,10 +1023,13 @@ class FlipkartParser(BaseParser):
                             if has_financial_values(record):
                                 records.append(record)
                                 invoice_numbers[txn_type].append(invoice_no)
-                        normalized_sales = make_preparsed_df(records, self.PLATFORM)
-                        dfs.append((normalized_sales, file))
-                        self.record_document_numbers('invoice', invoice_numbers['sale'])
-                        self.record_document_numbers('credit', invoice_numbers['return'])
+                        
+                        if records:
+                            normalized_sales = make_preparsed_df(records, self.PLATFORM)
+                            dfs.append((normalized_sales, file))
+                            self.record_document_numbers('invoice', invoice_numbers['sale'])
+                            self.record_document_numbers('credit', invoice_numbers['return'])
+                            logger.info(f"Processed {len(records)} sales records")
 
                         if 'Cash Back Report' in xl.sheet_names:
                             cash_df = pd.read_excel(file, sheet_name='Cash Back Report')
