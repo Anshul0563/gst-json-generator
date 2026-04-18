@@ -1,19 +1,21 @@
 # ui.py
-# FULL SANITIZED FINAL UI
-# Fixed responsiveness + clean logging + safer generate flow
+# ADVANCED UI WITH EXPORT OPTIONS AND ENHANCED LOGGING
 
 import json
+import time
 from pathlib import Path
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QFileDialog, QMessageBox,
     QLabel, QPushButton, QVBoxLayout, QHBoxLayout,
     QListWidget, QLineEdit, QTextEdit, QComboBox,
-    QProgressBar
+    QProgressBar, QCheckBox
 )
 from PySide6.QtCore import Qt, QCoreApplication
 
 from validators import run_full_validation
+from exporter import Exporter
+from logger import get_logger
 
 
 class MainWindow(QMainWindow):
@@ -23,13 +25,14 @@ class MainWindow(QMainWindow):
         self.parsers = parsers
         self.builder = builder
         self.files = []
+        self.logger = get_logger()
 
         self.setup_ui()
 
     # =====================================================
     def setup_ui(self):
-        self.setWindowTitle("GST JSON Generator Pro")
-        self.resize(1200, 760)
+        self.setWindowTitle("GST JSON Generator Pro v2.0")
+        self.resize(1200, 800)
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -37,7 +40,7 @@ class MainWindow(QMainWindow):
         root = QVBoxLayout(central)
         root.setSpacing(12)
 
-        title = QLabel("GST JSON Generator Pro")
+        title = QLabel("GST JSON Generator Pro v2.0")
         title.setAlignment(Qt.AlignCenter)
         title.setStyleSheet(
             "font-size:28px;font-weight:700;padding:10px;"
@@ -66,6 +69,23 @@ class MainWindow(QMainWindow):
         row.addWidget(self.period)
 
         root.addLayout(row)
+
+        # Export options
+        export_row = QHBoxLayout()
+        export_row.addWidget(QLabel("Export Formats:"))
+        
+        self.export_json = QCheckBox("JSON")
+        self.export_json.setChecked(True)
+        
+        self.export_csv = QCheckBox("CSV")
+        self.export_excel = QCheckBox("Excel")
+        
+        export_row.addWidget(self.export_json)
+        export_row.addWidget(self.export_csv)
+        export_row.addWidget(self.export_excel)
+        export_row.addStretch()
+        
+        root.addLayout(export_row)
 
         # buttons
         btns = QHBoxLayout()
@@ -126,6 +146,7 @@ class MainWindow(QMainWindow):
 
     def log(self, msg):
         self.logs.append(msg)
+        self.logger.info(msg)
         self.refresh_ui()
 
     def set_progress(self, value):
@@ -156,7 +177,7 @@ class MainWindow(QMainWindow):
                 self.list_files.addItem(Path(f).name)
                 added += 1
 
-        self.log(f"{added} file(s) added")
+        self.log(f"✅ {added} file(s) added")
 
     def remove_selected(self):
         rows = sorted(
@@ -168,13 +189,13 @@ class MainWindow(QMainWindow):
             self.list_files.takeItem(r)
             self.files.pop(r)
 
-        self.log("Selected file(s) removed")
+        self.log("✅ Selected file(s) removed")
 
     def clear_all(self):
         self.files.clear()
         self.list_files.clear()
         self.set_progress(0)
-        self.log("All files cleared")
+        self.log("✅ All files cleared")
 
     # =====================================================
     def generate(self):
@@ -185,77 +206,105 @@ class MainWindow(QMainWindow):
         ok, errors = run_full_validation(gstin, period, self.files)
 
         if not ok:
+            error_msg = "\n".join(errors)
             QMessageBox.warning(
                 self,
                 "Validation Error",
-                "\n".join(errors)
+                error_msg
             )
+            self.logger.warning(f"Validation failed: {error_msg}")
             return
 
         try:
             self.set_busy(True)
             self.logs.clear()
+            start_time = time.time()
 
-            self.log("Validation passed")
+            self.log("✓ Validation passed")
             self.set_progress(10)
 
-            self.log("Parsing files...")
+            self.log("⏳ Parsing files...")
             parser = self.parsers[mode]
 
             self.set_progress(25)
             parsed = parser.parse_files(self.files)
 
-            self.log("Files parsed successfully")
+            if not parsed:
+                raise ValueError("No data parsed from files")
+
+            self.log("✓ Files parsed successfully")
             self.set_progress(70)
 
-            self.log("Building JSON...")
+            self.log("⏳ Building JSON...")
             output = self.builder.build_gstr1(
                 parsed,
                 gstin,
                 period
             )
 
+            # Validate output
+            is_valid, errors = self.builder.validate_output(output)
+            if not is_valid:
+                raise ValueError(f"Output validation failed: {', '.join(errors)}")
+
+            self.log("✓ JSON built and validated")
             self.set_progress(85)
 
-            save_name = f"GSTR1_{mode}_{period}.json"
+            # Determine export formats
+            formats = []
+            if self.export_json.isChecked():
+                formats.append('json')
+            if self.export_csv.isChecked():
+                formats.append('csv')
+            if self.export_excel.isChecked():
+                formats.append('xlsx')
 
-            path, _ = QFileDialog.getSaveFileName(
-                self,
-                "Save JSON",
-                save_name,
-                "JSON Files (*.json)"
-            )
-
-            if not path:
-                self.log("Save cancelled")
+            if not formats:
+                self.log("⚠ No export formats selected")
                 self.set_progress(0)
+                self.set_busy(False)
                 return
 
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(
-                    output,
-                    f,
-                    indent=2,
-                    ensure_ascii=False
-                )
+            # Export files
+            from config import get_config
+            config = get_config()
+            output_dir = config.get('output.output_dir', './output')
+
+            exporter = Exporter(output_dir)
+            base_name = f"GSTR1_{mode}_{period}"
+
+            results = exporter.export(output, base_name, formats)
+
+            self.log("✓ Files exported:")
+            for fmt, result in results.items():
+                if "ERROR" in str(result):
+                    self.log(f"  ✗ {fmt}: {result}")
+                else:
+                    self.log(f"  ✓ {fmt}: {Path(result).name}")
 
             self.set_progress(100)
-            self.log("JSON generated successfully")
+
+            duration = time.time() - start_time
+            self.logger.perf("GST JSON generation", duration, len(parsed.get('summary', {}).get('rows', [])))
+
+            self.log(f"✓ Completed in {duration:.2f}s")
 
             QMessageBox.information(
                 self,
                 "Success",
-                "GST JSON Generated Successfully"
+                f"GST JSON Generated Successfully\nOutput: {output_dir}"
             )
 
         except Exception as e:
             self.set_progress(0)
-            self.log(f"Error: {str(e)}")
+            error_msg = f"Error: {str(e)}"
+            self.log(error_msg)
+            self.logger.exception(f"Generation failed: {error_msg}")
 
             QMessageBox.critical(
                 self,
                 "Error",
-                str(e)
+                error_msg
             )
 
         finally:
