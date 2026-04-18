@@ -1,33 +1,25 @@
 
-from typing import Dict, List
-import hashlib
-
-
 class GSTBuilder:
 
     def build_gstr1(self, parsed_data, gstin, period):
         s = parsed_data["summary"]
 
-        gt = round(s["total_taxable"], 2)
-
         return {
             "gstin": gstin,
             "fp": period,
             "version": "GST3.1.6",
-            "hash": self.make_hash(gstin, period, gt),
-            "gt": gt,
-            "cur_gt": gt,
+            "hash": "hash",
             "b2cs": self.build_b2cs(s["rows"]),
-            "supeco": self.build_supeco(parsed_data),
-            "doc_issue": self.build_doc_issue(parsed_data)
+            "supeco": {
+                "clttx": parsed_data["clttx"]
+            },
+            "doc_issue": {
+                "doc_det": self.build_docs(parsed_data)
+            }
         }
 
     # =====================================================
-    def make_hash(self, gstin, period, amount):
-        return hashlib.md5(f"{gstin}{period}{amount}".encode()).hexdigest()
-
-    # =====================================================
-    def build_b2cs(self, rows: List[Dict]):
+    def build_b2cs(self, rows):
         out = []
 
         for r in rows:
@@ -38,15 +30,7 @@ class GSTBuilder:
             cg = round(float(r["cgst"]), 2)
             sg = round(float(r["sgst"]), 2)
 
-            # remove zero rows
-            if tx == 0 and ig == 0 and cg == 0 and sg == 0:
-                continue
-
             if pos == "07":
-                if cg == 0 and sg == 0 and ig > 0:
-                    cg = round(ig / 2, 2)
-                    sg = round(ig / 2, 2)
-
                 row = {
                     "sply_ty": "INTRA",
                     "rt": 3,
@@ -57,7 +41,6 @@ class GSTBuilder:
                     "samt": sg,
                     "csamt": 0
                 }
-
             else:
                 row = {
                     "sply_ty": "INTER",
@@ -74,35 +57,37 @@ class GSTBuilder:
         return out
 
     # =====================================================
-    def build_supeco(self, data):
-        if "clttx" in data:
-            rows = [
-                x for x in data["clttx"]
-                if x["suppval"] != 0
-            ]
-            return {"clttx": rows}
+    def build_docs(self, data):
+        final = []
 
-        s = data["summary"]
+        # invoices
+        if data.get("invoice_docs"):
+            final.append({
+                "doc_num": 1,
+                "doc_typ": "Invoices for outward supply",
+                "docs": self.make_rows(data["invoice_docs"])
+            })
 
-        return {
-            "clttx": [{
-                "etin": data["etin"],
-                "suppval": round(s["total_taxable"], 2),
-                "igst": round(s["total_igst"], 2),
-                "cgst": round(s["total_cgst"], 2),
-                "sgst": round(s["total_sgst"], 2),
-                "cess": 0,
-                "flag": "N"
-            }]
-        }
+        # credit note
+        if data.get("credit_docs"):
+            final.append({
+                "doc_num": 5,
+                "doc_typ": "Credit Note",
+                "docs": self.make_rows(data["credit_docs"])
+            })
+
+        # debit note
+        if data.get("debit_docs"):
+            final.append({
+                "doc_num": 4,
+                "doc_typ": "Debit Note",
+                "docs": self.make_rows(data["debit_docs"])
+            })
+
+        return final
 
     # =====================================================
-    def build_doc_issue(self, data):
-        docs = data.get("invoice_docs", [])
-
-        if not docs:
-            return {"doc_det": []}
-
+    def make_rows(self, docs):
         rows = []
 
         for i, d in enumerate(docs, start=1):
@@ -117,12 +102,4 @@ class GSTBuilder:
                 "net_issue": qty
             })
 
-        return {
-            "doc_det": [
-                {
-                    "doc_num": 1,
-                    "doc_typ": "Invoices for outward supply",
-                    "docs": rows
-                }
-            ]
-        }
+        return rows
