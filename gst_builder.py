@@ -1,5 +1,3 @@
-# gst_builder.py
-# ULTIMATE V3 BUILDER (DELHI TAX FIX + CLEAN OUTPUT)
 
 from typing import Dict, List
 import hashlib
@@ -21,7 +19,7 @@ class GSTBuilder:
             "cur_gt": gt,
             "b2cs": self.build_b2cs(s["rows"]),
             "supeco": self.build_supeco(parsed_data),
-            "doc_issue": {"doc_det": []}
+            "doc_issue": self.build_doc_issue(parsed_data)
         }
 
     # =====================================================
@@ -40,9 +38,11 @@ class GSTBuilder:
             cg = round(float(r["cgst"]), 2)
             sg = round(float(r["sgst"]), 2)
 
-            # Delhi = intra
+            # remove zero rows
+            if tx == 0 and ig == 0 and cg == 0 and sg == 0:
+                continue
+
             if pos == "07":
-                # if no cgst/sgst available then split igst
                 if cg == 0 and sg == 0 and ig > 0:
                     cg = round(ig / 2, 2)
                     sg = round(ig / 2, 2)
@@ -76,20 +76,53 @@ class GSTBuilder:
     # =====================================================
     def build_supeco(self, data):
         if "clttx" in data:
-            return {"clttx": data["clttx"]}
+            rows = [
+                x for x in data["clttx"]
+                if x["suppval"] != 0
+            ]
+            return {"clttx": rows}
 
         s = data["summary"]
 
         return {
-            "clttx": [
+            "clttx": [{
+                "etin": data["etin"],
+                "suppval": round(s["total_taxable"], 2),
+                "igst": round(s["total_igst"], 2),
+                "cgst": round(s["total_cgst"], 2),
+                "sgst": round(s["total_sgst"], 2),
+                "cess": 0,
+                "flag": "N"
+            }]
+        }
+
+    # =====================================================
+    def build_doc_issue(self, data):
+        docs = data.get("invoice_docs", [])
+
+        if not docs:
+            return {"doc_det": []}
+
+        rows = []
+
+        for i, d in enumerate(docs, start=1):
+            qty = int(d["totnum"])
+
+            rows.append({
+                "num": i,
+                "from": d["from"],
+                "to": d["to"],
+                "totnum": qty,
+                "cancel": 0,
+                "net_issue": qty
+            })
+
+        return {
+            "doc_det": [
                 {
-                    "etin": data["etin"],
-                    "suppval": round(s["total_taxable"], 2),
-                    "igst": round(s["total_igst"], 2),
-                    "cgst": round(s["total_cgst"], 2),
-                    "sgst": round(s["total_sgst"], 2),
-                    "cess": 0,
-                    "flag": "N"
+                    "doc_num": 1,
+                    "doc_typ": "Invoices for outward supply",
+                    "docs": rows
                 }
             ]
         }

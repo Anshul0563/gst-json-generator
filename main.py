@@ -1,5 +1,3 @@
-# main.py
-# FINAL ENTRY FILE
 
 import sys
 from PySide6.QtWidgets import QApplication
@@ -10,8 +8,6 @@ from gst_builder import GSTBuilder
 from parsers import MeeshoParser, FlipkartParser, AmazonParser
 
 
-# =====================================================
-# MERGE ENGINE
 # =====================================================
 class MergeParser:
 
@@ -29,7 +25,7 @@ class MergeParser:
             try:
                 data = parser.parse_files(files)
 
-                if data["summary"]["total_taxable"] > 0:
+                if data["summary"]["total_taxable"] != 0:
                     outputs.append(data)
 
             except:
@@ -40,8 +36,10 @@ class MergeParser:
 
         return self.merge(outputs)
 
+    # =====================================================
     def merge(self, arr):
         state_map = {}
+        docs = []
         clttx = []
 
         total_taxable = 0
@@ -56,6 +54,18 @@ class MergeParser:
             total_igst += s["total_igst"]
             total_cgst += s["total_cgst"]
             total_sgst += s["total_sgst"]
+
+            docs.extend(item.get("invoice_docs", []))
+
+            clttx.append({
+                "etin": item["etin"],
+                "suppval": round(s["total_taxable"], 2),
+                "igst": round(s["total_igst"], 2),
+                "cgst": round(s["total_cgst"], 2),
+                "sgst": round(s["total_sgst"], 2),
+                "cess": 0,
+                "flag": "N"
+            })
 
             for r in s["rows"]:
                 pos = r["pos"]
@@ -74,25 +84,18 @@ class MergeParser:
                 state_map[pos]["cgst"] += r["cgst"]
                 state_map[pos]["sgst"] += r["sgst"]
 
-            clttx.append({
-                "etin": item["etin"],
-                "suppval": round(s["total_taxable"], 2),
-                "igst": round(s["total_igst"], 2),
-                "cgst": round(s["total_cgst"], 2),
-                "sgst": round(s["total_sgst"], 2),
-                "cess": 0,
-                "flag": "N"
-            })
+        rows = list(state_map.values())
 
         return {
             "platform": "Merged",
             "summary": {
-                "rows": list(state_map.values()),
+                "rows": rows,
                 "total_taxable": round(total_taxable, 2),
                 "total_igst": round(total_igst, 2),
                 "total_cgst": round(total_cgst, 2),
-                "total_sgst": round(total_sgst, 2),
+                "total_sgst": round(total_sgst, 2)
             },
+            "invoice_docs": docs,
             "clttx": clttx
         }
 
@@ -102,8 +105,6 @@ def main():
     setup_logging()
 
     app = QApplication(sys.argv)
-    app.setApplicationName("GST JSON Generator Pro")
-    app.setOrganizationName("X10THINK")
 
     parsers = {
         "Auto Merge": MergeParser(),
@@ -113,9 +114,8 @@ def main():
     }
 
     builder = GSTBuilder()
-
-    window = MainWindow(parsers, builder)
-    window.show()
+    win = MainWindow(parsers, builder)
+    win.show()
 
     sys.exit(app.exec())
 

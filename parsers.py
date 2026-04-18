@@ -1,30 +1,21 @@
-# parsers.py
-# ULTIMATE V3 - FIXED STATE / FLIPKART / CLEAN MERGE
 
 import pandas as pd
 from pathlib import Path
 
 
-# =====================================================
-# HELPERS
-# =====================================================
 def num(series):
     return pd.to_numeric(series, errors="coerce").fillna(0)
 
 
 STATE_CODES = {
-    "jammu and kashmir": "01",
-    "himachal pradesh": "02",
+    "delhi": "07", "new delhi": "07",
+    "uttar pradesh": "09", "up": "09",
+    "bihar": "10",
     "punjab": "03",
     "chandigarh": "04",
     "uttarakhand": "05",
     "haryana": "06",
-    "delhi": "07",
-    "new delhi": "07",
     "rajasthan": "08",
-    "uttar pradesh": "09",
-    "up": "09",
-    "bihar": "10",
     "sikkim": "11",
     "arunachal pradesh": "12",
     "nagaland": "13",
@@ -35,8 +26,7 @@ STATE_CODES = {
     "assam": "18",
     "west bengal": "19",
     "jharkhand": "20",
-    "odisha": "21",
-    "orissa": "21",
+    "odisha": "21", "orissa": "21",
     "chhattisgarh": "22",
     "madhya pradesh": "23",
     "gujarat": "24",
@@ -45,7 +35,6 @@ STATE_CODES = {
     "goa": "30",
     "kerala": "32",
     "tamil nadu": "33",
-    "pondicherry": "34",
     "puducherry": "34",
     "telangana": "36",
     "andhra pradesh": "37",
@@ -66,8 +55,31 @@ def state_to_code(v):
     return STATE_CODES.get(s)
 
 
+def make_docs(series):
+    vals = series.dropna().astype(str).unique().tolist()
+
+    if not vals:
+        return []
+
+    vals.sort()
+
+    return [{
+        "from": vals[0],
+        "to": vals[-1],
+        "totnum": len(vals)
+    }]
+
+
 def build_summary(df):
     df = df[df["pos"].notna()].copy()
+
+    # remove full zero rows
+    df = df[
+        (df["taxable_value"] != 0) |
+        (df["igst"] != 0) |
+        (df["cgst"] != 0) |
+        (df["sgst"] != 0)
+    ]
 
     if df.empty:
         return {
@@ -91,22 +103,22 @@ def build_summary(df):
         "total_taxable": float(g["taxable_value"].sum()),
         "total_igst": float(g["igst"].sum()),
         "total_cgst": float(g["cgst"].sum()),
-        "total_sgst": float(g["sgst"].sum()),
+        "total_sgst": float(g["sgst"].sum())
     }
 
 
+# =====================================================
 class BaseParser:
     def parse_files(self, files):
         raise NotImplementedError
 
 
 # =====================================================
-# MEESHO
-# =====================================================
 class MeeshoParser(BaseParser):
 
     def parse_files(self, files):
         frames = []
+        docs = []
 
         for file in files:
             try:
@@ -115,26 +127,29 @@ class MeeshoParser(BaseParser):
                 continue
 
             cols = [str(c).lower().strip() for c in df.columns]
-
             if "end_customer_state_new" not in cols:
                 continue
 
             df.columns = cols
 
-            taxable_col = next((c for c in cols if "taxable" in c), None)
-            tax_col = next((c for c in cols if "tax_amount" in c), None)
+            taxable = next((c for c in cols if "taxable" in c), None)
+            tax = next((c for c in cols if "tax_amount" in c), None)
+            inv = next((c for c in cols if "invoice" in c), None)
 
-            if not taxable_col:
+            if not taxable:
                 continue
 
             temp = pd.DataFrame()
             temp["pos"] = df["end_customer_state_new"].apply(state_to_code)
-            temp["taxable_value"] = num(df[taxable_col])
-            temp["igst"] = num(df[tax_col]) if tax_col else 0
+            temp["taxable_value"] = num(df[taxable])
+            temp["igst"] = num(df[tax]) if tax else 0
             temp["cgst"] = 0
             temp["sgst"] = 0
 
             frames.append(temp)
+
+            if inv:
+                docs.extend(make_docs(df[inv]))
 
         if not frames:
             raise Exception("No valid Meesho files found")
@@ -145,19 +160,16 @@ class MeeshoParser(BaseParser):
             "platform": "Meesho",
             "etin": "29AABCM2441G1ZS",
             "summary": build_summary(final),
-            "invoice_docs": [],
-            "credit_docs": [],
-            "debit_docs": []
+            "invoice_docs": docs
         }
 
 
-# =====================================================
-# FLIPKART
 # =====================================================
 class FlipkartParser(BaseParser):
 
     def parse_files(self, files):
         frames = []
+        docs = []
 
         for file in files:
             try:
@@ -186,19 +198,23 @@ class FlipkartParser(BaseParser):
                 cols = df.columns.tolist()
 
                 state_col = next((c for c in cols if "delivery_state" in c), None)
-                taxable_col = next((c for c in cols if "taxable_value" in c), None)
+                taxable = next((c for c in cols if "taxable_value" in c), None)
+                inv = next((c for c in cols if "invoice_id" in c), None)
 
-                if not state_col or not taxable_col:
+                if not state_col or not taxable:
                     continue
 
                 temp = pd.DataFrame()
                 temp["pos"] = df[state_col].apply(state_to_code)
-                temp["taxable_value"] = num(df[taxable_col])
+                temp["taxable_value"] = num(df[taxable])
                 temp["igst"] = num(df["igst_amount"]) if "igst_amount" in cols else 0
                 temp["cgst"] = num(df["cgst_amount"]) if "cgst_amount" in cols else 0
                 temp["sgst"] = num(df["sgst_amount_or_utgst_as_applicable"]) if "sgst_amount_or_utgst_as_applicable" in cols else 0
 
                 frames.append(temp)
+
+                if inv:
+                    docs.extend(make_docs(df[inv]))
 
         if not frames:
             raise Exception("No valid Flipkart files found")
@@ -209,19 +225,16 @@ class FlipkartParser(BaseParser):
             "platform": "Flipkart",
             "etin": "07AAFCN5072P1ZV",
             "summary": build_summary(final),
-            "invoice_docs": [],
-            "credit_docs": [],
-            "debit_docs": []
+            "invoice_docs": docs
         }
 
 
-# =====================================================
-# AMAZON
 # =====================================================
 class AmazonParser(BaseParser):
 
     def parse_files(self, files):
         frames = []
+        docs = []
 
         for file in files:
             ext = Path(file).suffix.lower()
@@ -248,7 +261,6 @@ class AmazonParser(BaseParser):
 
             if "ship_to_state" not in cols:
                 continue
-
             if "tax_exclusive_gross" not in cols:
                 continue
 
@@ -261,6 +273,9 @@ class AmazonParser(BaseParser):
 
             frames.append(temp)
 
+            if "invoice_number" in cols:
+                docs.extend(make_docs(df["invoice_number"]))
+
         if not frames:
             raise Exception("No valid Amazon files found")
 
@@ -270,7 +285,5 @@ class AmazonParser(BaseParser):
             "platform": "Amazon",
             "etin": "07AAICA3918J1CV",
             "summary": build_summary(final),
-            "invoice_docs": [],
-            "credit_docs": [],
-            "debit_docs": []
+            "invoice_docs": docs
         }
