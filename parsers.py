@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# parsers.py - Meesho + Amazon Production Parser (UPDATED / FIXED)
+# parsers.py - FINAL PRODUCTION VERSION (Meesho + Amazon Merge)
 
 import pandas as pd
 from pathlib import Path
@@ -23,46 +23,30 @@ def safe(v):
         return 0.0
 
 
-# Full India GST State Mapping
 STATE = {
-    "01": "01", "jammu": "01", "jammu and kashmir": "01",
-    "02": "02", "himachal": "02", "himachal pradesh": "02",
-    "03": "03", "punjab": "03",
-    "04": "04", "chandigarh": "04",
-    "05": "05", "uttarakhand": "05",
-    "06": "06", "haryana": "06", "gurgaon": "06", "gurugram": "06",
-    "07": "07", "delhi": "07", "new delhi": "07",
-    "08": "08", "rajasthan": "08",
-    "09": "09", "up": "09", "uttar pradesh": "09", "noida": "09", "ghaziabad": "09",
-    "10": "10", "bihar": "10",
-    "11": "11", "sikkim": "11",
-    "12": "12", "arunachal": "12",
-    "13": "13", "nagaland": "13",
-    "14": "14", "manipur": "14",
-    "15": "15", "mizoram": "15",
-    "16": "16", "tripura": "16",
-    "17": "17", "meghalaya": "17",
-    "18": "18", "assam": "18",
-    "19": "19", "west bengal": "19", "kolkata": "19",
-    "20": "20", "jharkhand": "20",
-    "21": "21", "odisha": "21", "orissa": "21",
-    "22": "22", "chhattisgarh": "22",
-    "23": "23", "madhya pradesh": "23", "mp": "23",
-    "24": "24", "gujarat": "24",
-    "25": "25", "daman": "25",
-    "26": "26", "dadra": "26",
-    "27": "27", "maharashtra": "27", "mumbai": "27", "pune": "27",
-    "28": "28", "andhra": "28", "andhra pradesh": "28",
-    "29": "29", "karnataka": "29", "bangalore": "29", "bengaluru": "29",
-    "30": "30", "goa": "30",
-    "31": "31", "lakshadweep": "31",
-    "32": "32", "kerala": "32",
-    "33": "33", "tamil nadu": "33", "chennai": "33",
-    "34": "34", "puducherry": "34",
-    "35": "35", "andaman": "35",
-    "36": "36", "telangana": "36", "hyderabad": "36",
-    "37": "37", "ap new": "37",
-    "38": "38", "ladakh": "38",
+    "01":"01","02":"02","03":"03","04":"04","05":"05","06":"06","07":"07",
+    "08":"08","09":"09","10":"10","11":"11","12":"12","13":"13","14":"14",
+    "15":"15","16":"16","17":"17","18":"18","19":"19","20":"20","21":"21",
+    "22":"22","23":"23","24":"24","25":"25","26":"26","27":"27","28":"28",
+    "29":"29","30":"30","31":"31","32":"32","33":"33","34":"34","35":"35",
+    "36":"36","37":"37","38":"38",
+
+    "delhi":"07","new delhi":"07",
+    "up":"09","uttar pradesh":"09","noida":"09","ghaziabad":"09",
+    "maharashtra":"27","mumbai":"27","pune":"27",
+    "karnataka":"29","bangalore":"29","bengaluru":"29",
+    "tamil nadu":"33","chennai":"33",
+    "telangana":"36","hyderabad":"36",
+    "rajasthan":"08",
+    "gujarat":"24",
+    "kerala":"32",
+    "west bengal":"19","kolkata":"19",
+    "haryana":"06","gurgaon":"06","gurugram":"06",
+    "punjab":"03",
+    "bihar":"10",
+    "odisha":"21",
+    "assam":"18",
+    "madhya pradesh":"23",
 }
 
 
@@ -72,16 +56,15 @@ def gst_state(x):
         return STATE[s]
 
     if s.isdigit():
-        if len(s) == 1:
-            s = "0" + s
+        s = s.zfill(2)
         if s in STATE:
             return s
 
     return None
 
 
-def split_tax(pos, tax_amt, seller="07"):
-    amt = safe(tax_amt)
+def split_tax(pos, amt, seller="07"):
+    amt = safe(amt)
 
     if pos == seller:
         half = round(amt / 2, 2)
@@ -91,10 +74,10 @@ def split_tax(pos, tax_amt, seller="07"):
 
 
 # =====================================================
-# BASE PARSER
+# BASE
 # =====================================================
 
-class Base:
+class BaseParser:
     PLATFORM = "Base"
     ETIN = ""
 
@@ -102,9 +85,12 @@ class Base:
         rows = []
 
         for f in files:
-            data = self.read_one(f)
-            if data:
-                rows.extend(data)
+            try:
+                data = self.read_one(f)
+                if data:
+                    rows.extend(data)
+            except Exception as e:
+                print(f"{self.PLATFORM} error in {f}: {e}")
 
         return self.finalize(rows)
 
@@ -114,7 +100,6 @@ class Base:
 
         df = pd.DataFrame(rows)
 
-        # Deduplicate
         df = df.drop_duplicates(
             subset=["invoice_no", "pos", "taxable_value", "txn_type"]
         ).reset_index(drop=True)
@@ -167,21 +152,17 @@ class Base:
 
 
 # =====================================================
-# MEESHO PARSER
+# MEESHO
 # =====================================================
 
-class MeeshoParser(Base):
+class MeeshoParser(BaseParser):
     PLATFORM = "Meesho"
     ETIN = "07AARCM9332R1CQ"
 
     def read_one(self, f):
         name = Path(f).name.lower()
 
-        if not (
-            "tcs_sales" in name
-            or "meesho" in name
-            or "tax_invoice" in name
-        ):
+        if not ("meesho" in name or "tcs_sales" in name):
             return []
 
         df = pd.read_excel(f) if f.endswith((".xlsx", ".xls")) else pd.read_csv(f)
@@ -192,7 +173,7 @@ class MeeshoParser(Base):
         st = cols.get("end_customer_state_new", cols.get("state"))
         taxv = cols.get(
             "total_taxable_sale_value",
-            cols.get("taxable_value", list(df.columns)[0]),
+            cols.get("taxable_value", list(df.columns)[0])
         )
         tax = cols.get("tax_amount")
 
@@ -202,10 +183,10 @@ class MeeshoParser(Base):
 
         for i, row in df.iterrows():
             pos = gst_state(row.get(st))
-            val = safe(row.get(taxv))
-
-            if pos is None:
+            if not pos:
                 continue
+
+            val = safe(row.get(taxv))
 
             if tax:
                 ig, cg, sg = split_tax(pos, row.get(tax), "07")
@@ -216,50 +197,53 @@ class MeeshoParser(Base):
                     ig, cg, sg = round(val * 0.03, 2), 0.0, 0.0
 
             if is_return:
-                val = -abs(val)
-                ig = -abs(ig)
-                cg = -abs(cg)
-                sg = -abs(sg)
+                val, ig, cg, sg = -abs(val), -abs(ig), -abs(cg), -abs(sg)
 
-            if val or ig or cg or sg:
-                out.append({
-                    "invoice_no": str(row.get(inv, i)),
-                    "pos": pos,
-                    "taxable_value": val,
-                    "igst": ig,
-                    "cgst": cg,
-                    "sgst": sg,
-                    "txn_type": "return" if is_return else "sale",
-                })
+            if abs(val) < 0.01 and abs(ig)+abs(cg)+abs(sg) < 0.01:
+                continue
+
+            out.append({
+                "invoice_no": str(row.get(inv, i)),
+                "pos": pos,
+                "taxable_value": val,
+                "igst": ig,
+                "cgst": cg,
+                "sgst": sg,
+                "txn_type": "return" if is_return else "sale",
+            })
 
         return out
 
 
 # =====================================================
-# AMAZON PARSER
+# AMAZON
 # =====================================================
 
-class AmazonParser(Base):
+class AmazonParser(BaseParser):
     PLATFORM = "Amazon"
     ETIN = "07AAICA3918J1CV"
 
     def read_one(self, f):
         name = Path(f).name.lower()
 
-        if not (name.endswith(".csv") or "amazon" in name or "mtr" in name):
+        if not (".csv" in name or "amazon" in name or "mtr" in name):
             return []
 
-        df = pd.read_csv(f)
+        try:
+            df = pd.read_csv(f, encoding="utf-8")
+        except:
+            df = pd.read_csv(f, encoding="latin1")
+
         cols = {str(c).strip().lower(): c for c in df.columns}
 
         out = []
 
         for i, row in df.iterrows():
             pos = gst_state(row.get(cols.get("ship_to_state")))
-            val = safe(row.get(cols.get("tax_exclusive_gross")))
-
-            if pos is None:
+            if not pos:
                 continue
+
+            val = safe(row.get(cols.get("tax_exclusive_gross")))
 
             ig = safe(row.get(cols.get("igst_tax")))
             cg = safe(row.get(cols.get("cgst_tax")))
@@ -274,21 +258,20 @@ class AmazonParser(Base):
             is_return = typ in ["refund", "cancel", "cancelled"] or val < 0
 
             if is_return:
-                val = -abs(val)
-                ig = -abs(ig)
-                cg = -abs(cg)
-                sg = -abs(sg)
+                val, ig, cg, sg = -abs(val), -abs(ig), -abs(cg), -abs(sg)
 
-            if val or ig or cg or sg:
-                out.append({
-                    "invoice_no": str(row.get(cols.get("invoice_number"), i)),
-                    "pos": pos,
-                    "taxable_value": val,
-                    "igst": ig,
-                    "cgst": cg,
-                    "sgst": sg,
-                    "txn_type": "return" if is_return else "sale",
-                })
+            if abs(val) < 0.01 and abs(ig)+abs(cg)+abs(sg) < 0.01:
+                continue
+
+            out.append({
+                "invoice_no": str(row.get(cols.get("invoice_number"), i)),
+                "pos": pos,
+                "taxable_value": val,
+                "igst": ig,
+                "cgst": cg,
+                "sgst": sg,
+                "txn_type": "return" if is_return else "sale",
+            })
 
         return out
 
@@ -299,12 +282,29 @@ class AmazonParser(Base):
 
 class AutoMergeParser:
     def parse_files(self, files, seller_gstin=None):
+        meesho_files = []
+        amazon_files = []
+
+        for f in files:
+            name = Path(f).name.lower()
+
+            if "meesho" in name or "tcs_sales" in name:
+                meesho_files.append(f)
+
+            elif "amazon" in name or "mtr" in name or name.endswith(".csv"):
+                amazon_files.append(f)
+
         results = []
 
-        for parser in [MeeshoParser(), AmazonParser()]:
-            res = parser.parse_files(files, seller_gstin)
-            if res:
-                results.append(res)
+        if meesho_files:
+            r = MeeshoParser().parse_files(meesho_files, seller_gstin)
+            if r:
+                results.append(r)
+
+        if amazon_files:
+            r = AmazonParser().parse_files(amazon_files, seller_gstin)
+            if r:
+                results.append(r)
 
         docs = []
         seen = set()
@@ -342,7 +342,9 @@ class AutoMergeParser:
 
         rows = []
 
-        for pos, vals in sorted(state.items()):
+        for pos in sorted(state.keys()):
+            vals = state[pos]
+
             if any(abs(v) > 0.001 for v in vals.values()):
                 rows.append({
                     "pos": pos,

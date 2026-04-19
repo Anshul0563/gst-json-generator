@@ -1,169 +1,378 @@
-# gst_builder.py
-# REFACTORED WITH ADVANCED PATTERNS
+# FULL updated gst_builder.py + parsers.py + exact JSON
+# (same style as uploaded output)
 
-from typing import Dict, List, Any, Tuple
+# =========================
+# FILE: gst_builder.py
+# =========================
 
-
-class SupplyTypeCalculator:
-    """Strategy pattern for supply type calculation."""
-    
-    @staticmethod
-    def calculate(pos: str, seller_state_code: str = "") -> Tuple[str, Dict[str, float]]:
-        """Calculate supply type and tax split for a position."""
-        from config import get_config
-        config = get_config()
-        
-        pos_str = str(pos).zfill(2)
-        seller_pos = str(seller_state_code).zfill(2) if seller_state_code else ""
-        tax_rate = config.get('gst.default_tax_rate', 3.0)
-        cgst_rate = config.get('gst.cgst_rate', 1.5)
-        sgst_rate = config.get('gst.sgst_rate', 1.5)
-        
-        if seller_pos and pos_str == seller_pos:
-            return "INTRA", {
-                "cgst_rate": cgst_rate,
-                "sgst_rate": sgst_rate,
-                "igst_rate": 0
-            }
-        else:
-            return "INTER", {
-                "cgst_rate": 0,
-                "sgst_rate": 0,
-                "igst_rate": tax_rate
-            }
-
-
-class B2CSItemBuilder:
-    """Builder pattern for B2CS items."""
-    
-    def __init__(self, row: Dict[str, Any], seller_state_code: str = ""):
-        self.row = row
-        self.seller_state_code = seller_state_code
-        self.pos = str(row.get("pos", "")).zfill(2)
-        self.txval = round(float(row.get("taxable_value", 0)), 2)
-        self.igst = round(float(row.get("igst", 0)), 2)
-        self.cgst = round(float(row.get("cgst", 0)), 2)
-        self.sgst = round(float(row.get("sgst", 0)), 2)
-    
-    def build(self) -> Dict[str, Any]:
-        """Build B2CS item."""
-        sply_type, tax_info = SupplyTypeCalculator.calculate(self.pos, self.seller_state_code)
-        
-        from config import get_config
-        config = get_config()
-        tax_rate = config.get('gst.default_tax_rate', 3.0)
-        
-        item = {
-            "sply_ty": sply_type,
-            "rt": tax_rate,
-            "typ": "OE",
-            "pos": self.pos,
-            "txval": self.txval,
-            "csamt": 0  # Cess amount
-        }
-        
-        if sply_type == "INTRA":
-            item["camt"] = self.cgst if self.cgst else round(self.txval * 0.015, 2)
-            item["samt"] = self.sgst if self.sgst else round(self.txval * 0.015, 2)
-        else:
-            item["iamt"] = self.igst if self.igst else round(self.cgst + self.sgst, 2)
-        
-        return item
-    
-    def is_valid(self) -> bool:
-        """Check if item has valid data."""
-        return (self.txval != 0 or self.igst != 0 or 
-                self.cgst != 0 or self.sgst != 0)
+import json
 
 
 class GSTBuilder:
-    """Advanced GST JSON builder with design patterns."""
-    
     def __init__(self):
-        """Initialize builder."""
         self.version = "GST3.1.6"
 
-    def _extract_state_code(self, gstin: str, parsed_data: Dict) -> str:
-        """Resolve seller state code from GSTIN first, then parsed fallback."""
-        gstin_str = str(gstin).strip().upper()
-        if len(gstin_str) >= 2 and gstin_str[:2].isdigit():
-            return gstin_str[:2]
-        parsed_state = parsed_data.get("seller_state_code", "")
-        return str(parsed_state).zfill(2) if parsed_state else ""
-    
-    def build_gstr1(self, parsed_data: Dict, gstin: str, period: str) -> Dict[str, Any]:
-        """Build complete GSTR1 JSON."""
+    def build(self, parsed_data, gstin, fp):
         summary = parsed_data.get("summary", {})
-        seller_state_code = self._extract_state_code(gstin, parsed_data)
-        
-        return {
-            "gstin": gstin.upper(),
-            "fp": period,
+        rows = summary.get("rows", [])
+        clttx = parsed_data.get("clttx", [])
+        doc_issue = parsed_data.get("doc_issue", {"doc_det": []})
+
+        b2cs = []
+
+        for r in rows:
+            pos = str(r["pos"]).zfill(2)
+            tx = round(float(r["taxable_value"]), 2)
+            ig = round(float(r["igst"]), 2)
+            cg = round(float(r["cgst"]), 2)
+            sg = round(float(r["sgst"]), 2)
+
+            item = {
+                "sply_ty": "INTRA" if cg > 0 or sg > 0 else "INTER",
+                "rt": 3.0,
+                "typ": "OE",
+                "pos": pos,
+                "txval": tx,
+                "csamt": 0,
+            }
+
+            if ig != 0:
+                item["iamt"] = ig
+            else:
+                item["camt"] = cg
+                item["samt"] = sg
+
+            b2cs.append(item)
+
+        output = {
+            "gstin": gstin,
+            "fp": fp,
             "version": self.version,
             "hash": "hash",
-            "b2cs": self._build_b2cs(summary.get("rows", []), seller_state_code),
+            "b2cs": b2cs,
             "supeco": {
-                "clttx": parsed_data.get("clttx", [])
+                "clttx": clttx
             },
-            "doc_issue": parsed_data.get("doc_issue", {"doc_det": []}),
-            "summary": self._build_summary(summary)
+            "doc_issue": doc_issue,
+            "summary": {
+                "total_items": len(b2cs),
+                "total_taxable": round(summary.get("total_taxable", 0), 2),
+                "total_igst": round(summary.get("total_igst", 0), 2),
+                "total_cgst": round(summary.get("total_cgst", 0), 2),
+                "total_sgst": round(summary.get("total_sgst", 0), 2),
+                "total_tax": round(
+                    summary.get("total_igst", 0)
+                    + summary.get("total_cgst", 0)
+                    + summary.get("total_sgst", 0),
+                    2
+                ),
+            }
         }
-    
-    def _build_b2cs(self, rows: List[Dict], seller_state_code: str) -> List[Dict]:
-        """Build B2CS (Business to Consumer Supply) items."""
-        items = []
-        
-        for row in rows:
-            builder = B2CSItemBuilder(row, seller_state_code)
-            
-            if not builder.is_valid():
-                continue
-            
-            items.append(builder.build())
-        
-        return items
-    
-    def _build_summary(self, summary: Dict) -> Dict[str, Any]:
-        """Build summary statistics."""
+
+        return output
+
+    def save(self, data, filepath):
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+
+
+# =========================
+# FILE: parsers.py
+# =========================
+
+import pandas as pd
+from pathlib import Path
+from collections import defaultdict
+
+
+def safe(v):
+    try:
+        if pd.isna(v):
+            return 0.0
+        return float(str(v).replace(",", "").replace("₹", "").strip() or 0)
+    except:
+        return 0.0
+
+
+STATE = {
+    "01": "01", "jammu": "01",
+    "02": "02", "himachal": "02",
+    "03": "03", "punjab": "03",
+    "04": "04", "chandigarh": "04",
+    "05": "05", "uttarakhand": "05",
+    "06": "06", "haryana": "06",
+    "07": "07", "delhi": "07", "new delhi": "07",
+    "08": "08", "rajasthan": "08",
+    "09": "09", "up": "09", "uttar pradesh": "09",
+    "10": "10", "bihar": "10",
+    "17": "17", "meghalaya": "17",
+    "19": "19", "west bengal": "19",
+    "20": "20", "jharkhand": "20",
+    "21": "21", "odisha": "21",
+    "24": "24", "gujarat": "24",
+    "27": "27", "maharashtra": "27",
+    "28": "28", "andhra pradesh": "28",
+    "29": "29", "karnataka": "29",
+    "33": "33", "tamil nadu": "33",
+    "36": "36", "telangana": "36",
+    "37": "37", "ap new": "37",
+}
+
+
+def gst_state(x):
+    s = str(x).strip().lower()
+    if s in STATE:
+        return STATE[s]
+    if s.isdigit():
+        return s.zfill(2)
+    return None
+
+
+def split_tax(pos, amt, seller="07"):
+    amt = safe(amt)
+    if pos == seller:
+        half = round(amt / 2, 2)
+        return 0.0, half, half
+    return amt, 0.0, 0.0
+
+
+def build_doc_ranges(nums):
+    nums = sorted(set(str(x) for x in nums if str(x).strip()))
+    if not nums:
+        return []
+
+    return [{
+        "num": 1,
+        "from": nums[0],
+        "to": nums[-1],
+        "totnum": len(nums),
+        "cancel": 0,
+        "net_issue": len(nums),
+    }]
+
+
+class Base:
+    PLATFORM = "Base"
+    ETIN = ""
+
+    def parse_files(self, files, seller_gstin=None):
+        rows = []
+        for f in files:
+            rows.extend(self.read_one(f))
+        return self.finalize(rows)
+
+    def finalize(self, rows):
+        if not rows:
+            return None
+
+        df = pd.DataFrame(rows).drop_duplicates(
+            subset=["invoice_no", "pos", "taxable_value", "txn_type"]
+        )
+
+        grp = df.groupby("pos", as_index=False)[
+            ["taxable_value", "igst", "cgst", "sgst"]
+        ].sum().round(2)
+
+        sales = df[df["txn_type"] == "sale"]
+        returns = df[df["txn_type"] == "return"]
+
         return {
-            "total_items": len(summary.get("rows", [])),
-            "total_taxable": round(summary.get("total_taxable", 0), 2),
-            "total_igst": round(summary.get("total_igst", 0), 2),
-            "total_cgst": round(summary.get("total_cgst", 0), 2),
-            "total_sgst": round(summary.get("total_sgst", 0), 2),
-            "total_tax": round(
-                summary.get("total_igst", 0) + 
-                summary.get("total_cgst", 0) + 
-                summary.get("total_sgst", 0),
-                2
-            )
+            "etin": self.ETIN,
+            "summary": {
+                "rows": grp.to_dict("records"),
+                "total_taxable": round(grp["taxable_value"].sum(), 2),
+                "total_igst": round(grp["igst"].sum(), 2),
+                "total_cgst": round(grp["cgst"].sum(), 2),
+                "total_sgst": round(grp["sgst"].sum(), 2),
+            },
+            "invoice_docs": sales.to_dict("records"),
+            "credit_docs": returns.to_dict("records"),
         }
-    
-    def validate_output(self, output: Dict) -> Tuple[bool, List[str]]:
-        """Validate output JSON structure."""
-        errors = []
-        
-        # Check required fields
-        required_fields = ["gstin", "fp", "version", "b2cs", "supeco"]
-        for field in required_fields:
-            if field not in output:
-                errors.append(f"Missing required field: {field}")
-        
-        # Validate GSTIN
-        if output.get("gstin"):
-            if not str(output["gstin"]).isalnum() or len(output["gstin"]) < 10:
-                errors.append("Invalid GSTIN in output")
-        
-        # Validate period
-        if output.get("fp"):
-            period = str(output["fp"])
-            if not (len(period) == 6 and period.isdigit()):
-                errors.append("Invalid period in output")
-        
-        # Validate B2CS items
-        b2cs = output.get("b2cs", [])
-        for i, item in enumerate(b2cs):
-            if not all(k in item for k in ["sply_ty", "rt", "pos", "txval"]):
-                errors.append(f"Invalid B2CS item at index {i}")
-        
-        return len(errors) == 0, errors
+
+
+class MeeshoParser(Base):
+    PLATFORM = "Meesho"
+    ETIN = "07AARCM9332R1CQ"
+
+    def read_one(self, f):
+        name = Path(f).name.lower()
+        if "meesho" not in name and "tcs_sales" not in name:
+            return []
+
+        df = pd.read_excel(f) if f.endswith(("xlsx", "xls")) else pd.read_csv(f)
+
+        cols = {str(c).lower(): c for c in df.columns}
+
+        inv = cols.get("sub_order_num", list(df.columns)[0])
+        st = cols.get("end_customer_state_new", cols.get("state"))
+        taxv = cols.get("total_taxable_sale_value", cols.get("taxable_value"))
+        tax = cols.get("tax_amount")
+
+        is_return = "return" in name
+        out = []
+
+        for _, row in df.iterrows():
+            pos = gst_state(row.get(st))
+            val = safe(row.get(taxv))
+            if not pos:
+                continue
+
+            if tax:
+                ig, cg, sg = split_tax(pos, row.get(tax))
+            else:
+                ig = round(val * 0.03, 2)
+                cg = sg = 0.0
+                if pos == "07":
+                    ig = 0
+                    cg = sg = round(val * 0.015, 2)
+
+            if is_return:
+                val, ig, cg, sg = -abs(val), -abs(ig), -abs(cg), -abs(sg)
+
+            out.append({
+                "invoice_no": str(row.get(inv)),
+                "pos": pos,
+                "taxable_value": val,
+                "igst": ig,
+                "cgst": cg,
+                "sgst": sg,
+                "txn_type": "return" if is_return else "sale",
+            })
+
+        return out
+
+
+class AmazonParser(Base):
+    PLATFORM = "Amazon"
+    ETIN = "07AAICA3918J1CV"
+
+    def read_one(self, f):
+        name = Path(f).name.lower()
+        if "amazon" not in name and "mtr" not in name and not name.endswith(".csv"):
+            return []
+
+        df = pd.read_csv(f)
+        cols = {str(c).lower(): c for c in df.columns}
+        out = []
+
+        for i, row in df.iterrows():
+            pos = gst_state(row.get(cols.get("ship_to_state")))
+            if not pos:
+                continue
+
+            val = safe(row.get(cols.get("tax_exclusive_gross")))
+            ig = safe(row.get(cols.get("igst_tax")))
+            cg = safe(row.get(cols.get("cgst_tax")))
+            sg = safe(row.get(cols.get("sgst_tax"))) + safe(row.get(cols.get("utgst_tax")))
+
+            typ = str(row.get(cols.get("transaction_type"), "shipment")).lower()
+            ret = typ in ["refund", "cancel"] or val < 0
+
+            if ret:
+                val, ig, cg, sg = -abs(val), -abs(ig), -abs(cg), -abs(sg)
+
+            out.append({
+                "invoice_no": str(row.get(cols.get("invoice_number"), i)),
+                "pos": pos,
+                "taxable_value": val,
+                "igst": ig,
+                "cgst": cg,
+                "sgst": sg,
+                "txn_type": "return" if ret else "sale",
+            })
+
+        return out
+
+
+class AutoMergeParser:
+    def parse_files(self, files, seller_gstin=None):
+        results = []
+
+        for p in [MeeshoParser(), AmazonParser()]:
+            r = p.parse_files(files, seller_gstin)
+            if r:
+                results.append(r)
+
+        docs = []
+        seen = set()
+
+        for r in results:
+            for bucket in ["invoice_docs", "credit_docs"]:
+                for d in r[bucket]:
+                    key = (
+                        d["invoice_no"],
+                        d["pos"],
+                        round(d["taxable_value"], 2),
+                        d["txn_type"]
+                    )
+                    if key not in seen:
+                        seen.add(key)
+                        docs.append(d)
+
+        state = defaultdict(lambda: {
+            "taxable_value": 0,
+            "igst": 0,
+            "cgst": 0,
+            "sgst": 0
+        })
+
+        for d in docs:
+            p = d["pos"]
+            state[p]["taxable_value"] += d["taxable_value"]
+            state[p]["igst"] += d["igst"]
+            state[p]["cgst"] += d["cgst"]
+            state[p]["sgst"] += d["sgst"]
+
+        rows = []
+        for pos, v in sorted(state.items()):
+            rows.append({
+                "pos": pos,
+                "taxable_value": round(v["taxable_value"], 2),
+                "igst": round(v["igst"], 2),
+                "cgst": round(v["cgst"], 2),
+                "sgst": round(v["sgst"], 2),
+            })
+
+        sales = [d for d in docs if d["txn_type"] == "sale"]
+        returns = [d for d in docs if d["txn_type"] == "return"]
+
+        return {
+            "summary": {
+                "rows": rows,
+                "total_taxable": round(sum(x["taxable_value"] for x in rows), 2),
+                "total_igst": round(sum(x["igst"] for x in rows), 2),
+                "total_cgst": round(sum(x["cgst"] for x in rows), 2),
+                "total_sgst": round(sum(x["sgst"] for x in rows), 2),
+            },
+            "clttx": [
+                {
+                    "etin": r["etin"],
+                    "suppval": r["summary"]["total_taxable"],
+                    "igst": r["summary"]["total_igst"],
+                    "cgst": r["summary"]["total_cgst"],
+                    "sgst": r["summary"]["total_sgst"],
+                    "cess": 0,
+                    "flag": "N",
+                }
+                for r in results
+            ],
+            "doc_issue": {
+                "doc_det": [
+                    {
+                        "doc_num": 1,
+                        "doc_typ": "Invoices for outward supply",
+                        "docs": build_doc_ranges([x["invoice_no"] for x in sales]),
+                    },
+                    {
+                        "doc_num": 5,
+                        "doc_typ": "Credit Note",
+                        "docs": build_doc_ranges([x["invoice_no"] for x in returns]),
+                    },
+                    {
+                        "doc_num": 4,
+                        "doc_typ": "Debit Note",
+                        "docs": [],
+                    },
+                ]
+            },
+        }
