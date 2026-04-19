@@ -828,7 +828,7 @@ class BaseParser:
             "doc_issue": doc_issue
         }
     
-def parse_files(self, files: List[str], seller_gstin: Optional[str] = None) -> List[Dict[str, Any]]:
+    def parse_files(self, files: List[str], seller_gstin: Optional[str] = None) -> List[Dict[str, Any]]:
         """Main orchestration method."""
         self.seller_state_code = self.resolve_seller_state_code(seller_gstin)
         self.reset_document_registry()
