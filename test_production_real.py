@@ -1,113 +1,97 @@
 #!/usr/bin/env python3
 """
-REAL PRODUCTION FILES SAFE VALIDATION
+GST PRODUCTION VALIDATION - REAL FEBRUARY FILES
+Expected: Flipkart Rs194.19, Amazon Rs193.20, Meesho Rs2406.79, Merged Rs2794.18
 """
 
 import sys
 sys.path.insert(0, '.')
-
-from parsers import MeeshoParser, FlipkartParser, AmazonParser, AutoMergeParser
+from parsers import FlipkartParser, AmazonParser, MeeshoParser, AutoMergeParser
+from pathlib import Path
 import logging
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(message)s')
 
-FLIPKART_FILE = "test_data/flipkart_variants/1f1924de-add8-4717-8998-64952c2dc16e_1773998487000.xlsx"
-AMAZON_FILE = "test_data/MTR_B2C-FEBRUARY-2026-A1YGIWFZR88S6S.csv"
+FLIPKART_FILE = 'test_data/flipkart_variants/1f1924de-add8-4717-8998-64952c2dc16e_1773998487000.xlsx'
+AMAZON_FILE = 'test_data/MTR_B2C-FEBRUARY-2026-A1YGIWFZR88S6S.csv'
+MEESHO_FILES = ['test_data/tcs_sales.xlsx', 'test_data/tcs_sales_return.xlsx', 'test_data/Tax_invoice_details.xlsx']
 
-MEESHO_FILES = [
-    "test_data/tcs_sales.xlsx",
-    "test_data/tcs_sales_return.xlsx",
-    "test_data/Tax_invoice_details.xlsx"
-]
+EXPECTED = {
+    'flipkart': 194.19,
+    'amazon': 193.20,
+    'meesho': 2406.79,
+    'merged': 2794.18
+}
 
-# FINAL REAL EXPECTED VALUES
-EXPECTED_FLIPKART = 194.19
-EXPECTED_AMAZON = 193.20
-EXPECTED_MEESHO = 2406.79
-EXPECTED_MERGED = 2794.18
+def safe_extract_total(result):
+    """Safe total extraction with full debug."""
+    print("DEBUG: result =", result)
+    print("DEBUG: type(result) =", type(result))
+    
+    if result is None:
+        return None, "No result"
+    
+    if isinstance(result, dict):
+        if 'summary' in result and isinstance(result['summary'], dict):
+            if 'total_taxable' in result['summary']:
+                return result['summary']['total_taxable'], "OK"
+            else:
+                return None, "total_taxable missing"
+        else:
+            return None, "summary missing/invalid"
+    else:
+        return None, f"Wrong type {type(result)}"
 
-
-def safe_validate_result(result):
-    print("RAW RESULT TYPE:", type(result))
-    print("RAW RESULT:", result)
-
-    if not isinstance(result, dict):
-        print("FAIL: parser did not return dict")
+def test_platform(name, files, expected):
+    print(f"\n=== {name.upper()} ===")
+    parser_map = {
+        'flipkart': FlipkartParser,
+        'amazon': AmazonParser,
+        'meesho': MeeshoParser
+    }
+    
+    ParserClass = parser_map.get(name, AutoMergeParser)
+    parser = ParserClass()
+    result = parser.parse_files(files)
+    
+    total, status = safe_extract_total(result)
+    if total is None:
+        print(f"{name} FAIL: {status}")
         return False
-
-    if "summary" not in result:
-        print("FAIL: summary missing")
-        return False
-
-    if "total_taxable" not in result["summary"]:
-        print("FAIL: total_taxable missing")
-        return False
-
-    return True
-
-
-def validate_total(name, total, expected):
-    match = abs(total - expected) <= 1.0
-    print(f"{name} total Rs{total:.2f} | Expected Rs{expected:.2f} => {'PASS' if match else 'FAIL'}")
+    
+    match = abs(total - expected) < 1.0
+    print(f"{name} Rs{total:.2f} (exp Rs{expected:.2f}): {'PASS' if match else 'FAIL'}")
     return match
 
-
-def test_flipkart():
-    print("\n=== FLIPKART FEBRUARY ===")
-    parser = FlipkartParser()
-    result = parser.parse_files([FLIPKART_FILE])
-
-    if safe_validate_result(result):
-        total = result["summary"]["total_taxable"]
-        return validate_total("Flipkart", total, EXPECTED_FLIPKART)
-
-    return False
-
-
-def test_amazon():
-    print("\n=== AMAZON MTR ===")
-    parser = AmazonParser()
-    result = parser.parse_files([AMAZON_FILE])
-
-    if safe_validate_result(result):
-        total = result["summary"]["total_taxable"]
-        return validate_total("Amazon", total, EXPECTED_AMAZON)
-
-    return False
-
-
-def test_meesho():
-    print("\n=== MEESHO ===")
-    parser = MeeshoParser()
-    result = parser.parse_files(MEESHO_FILES)
-
-    if safe_validate_result(result):
-        total = result["summary"]["total_taxable"]
-        return validate_total("Meesho", total, EXPECTED_MEESHO)
-
-    return False
-
-
-def test_automerge():
-    print("\n=== AUTO MERGE ALL ===")
+def test_merged():
+    print("\n=== MERGED ALL ===")
     parser = AutoMergeParser()
-    result = parser.parse_files([FLIPKART_FILE, AMAZON_FILE] + MEESHO_FILES)
+    all_files = [FLIPKART_FILE, AMAZON_FILE] + MEESHO_FILES
+    result = parser.parse_files(all_files)
+    
+    total, status = safe_extract_total(result)
+    if total is None:
+        print(f"Merged FAIL: {status}")
+        return False
+    
+    match = abs(total - EXPECTED['merged']) < 1.0
+    print(f"Merged Rs{total:.2f} (exp Rs{EXPECTED['merged']:.2f}): {'PASS' if match else 'FAIL'}")
+    return match
 
-    if safe_validate_result(result):
-        total = result["summary"]["total_taxable"]
-        return validate_total("Merged", total, EXPECTED_MERGED)
+print("GST FEBRUARY PRODUCTION VALIDATION")
+print("Expected totals: Flipkart 194.19, Amazon 193.20, Meesho 2406.79, Merged 2794.18")
 
-    return False
+tests = [
+    ('flipkart', [FLIPKART_FILE], EXPECTED['flipkart']),
+    ('amazon', [AMAZON_FILE], EXPECTED['amazon']),
+    ('meesho', MEESHO_FILES, EXPECTED['meesho'])
+]
 
+all_pass = test_merged()
+for name, files, expected in tests:
+    all_pass = all_pass and test_platform(name, files, expected)
 
-print("GST REAL PRODUCTION SAFE TEST SUITE")
+print("\n" + "="*50)
+print("FINAL RESULT:", "ALL PASS ✅" if all_pass else "SOME FAIL ❌")
+sys.exit(0 if all_pass else 1)
 
-passed = (
-    test_flipkart() and
-    test_amazon() and
-    test_meesho() and
-    test_automerge()
-)
-
-print("\nOVERALL RESULT:", "PASS" if passed else "FAIL")
-sys.exit(0 if passed else 1)
