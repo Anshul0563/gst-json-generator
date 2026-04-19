@@ -223,95 +223,58 @@ def split_tax_amount(pos: Optional[str], tax_amount: Any, seller_state_code: Opt
     return amount, 0.0, 0.0
 
 
-def normalize_doc_list(items: List[Any]) -> List[Dict[str, Any]]:\n    """Normalize document list to consistent dict format with 'invoice_no' key.\n    Supports mixed input: strings, dicts, None, empty.\n    """\n    normalized = []\n    for item in items:\n        if item is None or item == '':\n            continue\n        invoice_no = None\n        if isinstance(item, dict):\n            invoice_no = clean_invoice_no(item.get('invoice_no'))\n        elif isinstance(item, str):\n            invoice_no = clean_invoice_no(item)\n        if invoice_no:\n            normalized.append({'invoice_no': invoice_no})\n    return normalized
+def normalize_doc_list(items: List[Any]) -> List[Dict[str, Any]]:
+    """
+    Normalize document list into standard format:
+    [{"invoice_no": "..."}]
+    """
+    normalized = []
+
+    if not items:
+        return normalized
+
+    for item in items:
+        if item is None:
+            continue
+
+        invoice_no = None
+
+        if isinstance(item, dict):
+            invoice_no = clean_invoice_no(item.get("invoice_no"))
+        elif isinstance(item, str):
+            invoice_no = clean_invoice_no(item)
+
+        if invoice_no:
+            normalized.append({"invoice_no": invoice_no})
+
+    return normalized
 
 
-def build_doc_issue_details(invoice_docs: List[Dict[str, Any]], credit_docs: List[Dict[str, Any]], debit_docs: List[Dict[str, Any]]) -> Dict[str, Any]:
-    \"\"\"Build document issue ranges from invoice-style documents.\"\"\"
-    # Normalize inputs to consistent format
+def build_doc_issue_details(invoice_docs, credit_docs, debit_docs):
+    """Build document issue ranges from invoice-style documents."""
     invoice_docs = normalize_doc_list(invoice_docs)
     credit_docs = normalize_doc_list(credit_docs)
     debit_docs = normalize_doc_list(debit_docs)
 
-    def normalize_doc_value(value: Any) -> Optional[str]:
-        return clean_invoice_no(value)
-
-    def natural_key(value: str) -> List[Any]:
-        return [f"{int(token):012d}" if token.isdigit() else token.lower() for token in re.findall(r'\d+|\D+', value)]
-
-    def doc_parts(value: str) -> Tuple[str, Optional[int]]:
-        match = re.match(r'^(.*?)(\d+)$', value)
-        if not match:
-            return value, None
-        return match.group(1), int(match.group(2))
-
-    def make_ranges(values: List[str]) -> List[Dict[str, Any]]:
-        if not values:
-            return []
-
-        sorted_values = sorted(set(values), key=natural_key)
-        ranges = []
-        current_group = [sorted_values[0]]
-
-        for value in sorted_values[1:]:
-            prev = current_group[-1]
-            prev_prefix, prev_number = doc_parts(prev)
-            prefix, number = doc_parts(value)
-
-            is_contiguous = (
-                prev_prefix == prefix and
-                prev_number is not None and
-                number is not None and
-                number == prev_number + 1
-            )
-
-            if is_contiguous:
-                current_group.append(value)
-            else:
-                ranges.append({
-                    \"from\": current_group[0],
-                    \"to\": current_group[-1],
-                    \"totnum\": len(current_group),
-                    \"cancel\": 0,
-                    \"net_issue\": len(current_group)
-                })
-                current_group = [value]
-
-        ranges.append({
-            \"from\": current_group[0],
-            \"to\": current_group[-1],
-            \"totnum\": len(current_group),
-            \"cancel\": 0,
-            \"net_issue\": len(current_group)
-        })
-        return ranges
-
-    def make_bucket(doc_num: int, doc_typ: str, docs: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        invoice_numbers = [
-            normalize_doc_value(doc.get('invoice_no') if isinstance(doc, dict) else doc)
-            for doc in docs
-            if normalize_doc_value(doc.get('invoice_no') if isinstance(doc, dict) else doc)
+    return {
+        "doc_det": [
+            {
+                "doc_num": 1,
+                "doc_typ": "Invoices for outward supply",
+                "docs": invoice_docs
+            },
+            {
+                "doc_num": 5,
+                "doc_typ": "Credit Note",
+                "docs": credit_docs
+            },
+            {
+                "doc_num": 6,
+                "doc_typ": "Debit Note",
+                "docs": debit_docs
+            }
         ]
-        ranges = make_ranges(invoice_numbers)
-        if not ranges:
-            return None
-        return {
-            \"doc_num\": doc_num,
-            \"doc_typ\": doc_typ,
-            \"docs\": ranges
-        }
-
-    doc_det = []
-    for doc_num, label, docs in [
-        (1, \"Invoices for outward supply\", invoice_docs),
-        (5, \"Credit Note\", credit_docs),
-        (6, \"Debit Note\", debit_docs),
-    ]:
-        bucket = make_bucket(doc_num, label, docs)
-        if bucket:
-            doc_det.append(bucket)
-
-    return {\"doc_det\": doc_det}
+    }
 
 
 def make_preparsed_df(records: List[Dict[str, Any]], platform: str) -> pd.DataFrame:
@@ -865,11 +828,11 @@ class BaseParser:
             "doc_issue": doc_issue
         }
     
-    def parse_files(self, files: List[str], seller_gstin: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def parse_files(self, files: List[str], seller_gstin: Optional[str] = None) -> List[Dict[str, Any]]:
         """Main orchestration method."""
         self.seller_state_code = self.resolve_seller_state_code(seller_gstin)
         self.reset_document_registry()
-        logger.info(f"\n🔍 Parsing {self.PLATFORM}")
+        logger.info(f"🔍 Parsing {self.PLATFORM}")
         file_dfs = self.read_files(files)
         if not file_dfs:
             logger.warning(f"No files found for {self.PLATFORM}")
