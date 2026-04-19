@@ -41,7 +41,7 @@ class Base:
     PLATFORM = "Base"
     ETIN = ""
 
-    def parse_files(self, files):
+    def parse_files(self, files, seller_gstin=None):
         rows = []
         for f in files:
             data = self.read_one(f)
