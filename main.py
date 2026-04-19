@@ -21,7 +21,6 @@ from gst_builder import GSTBuilder
 from parsers import (
     AutoMergeParser,
     MeeshoParser,
-    FlipkartParser,
     AmazonParser
 )
 
@@ -51,7 +50,6 @@ def create_parsers() -> dict:
     parsers = {
         "Auto Merge": AutoMergeParser(),
         "Meesho": MeeshoParser(),
-        "Flipkart": FlipkartParser(),
         "Amazon": AmazonParser(),
     }
     
