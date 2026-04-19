@@ -11,6 +11,7 @@ from pathlib import Path
 
 logging.basicConfig(level=logging.INFO)
 
+# Real production files only
 FLIPKART_FILE = 'test_data/flipkart_variants/1f1924de-add8-4717-8998-64952c2dc16e_1773998487000.xlsx'
 AMAZON_FILE = 'test_data/MTR_B2C-FEBRUARY-2026-A1YGIWFZR88S6S.csv'
 MEESHO_FILES = [
@@ -22,45 +23,45 @@ MEESHO_FILES = [
 EXPECTED_FLIPKART = 1686.38
 
 def test_flipkart():
-    print("\n=== FLIPKART FEBRUARY ===")
+    print('\\n=== FLIPKART FEBRUARY ===')
     parser = FlipkartParser()
     results = parser.parse_files([FLIPKART_FILE])
     if results:
         for r in results:
             total = r['summary']['total_taxable']
-            print("File:", r['filename'], "Month:", r['month'], "Total:", total)
+            print(f"File: {r['filename']} Month: {r['month']} Total: Rs{total:.2f}")
             match = abs(total - EXPECTED_FLIPKART) < 1.0
-            print("Expected Rs%.2f: %s" % (EXPECTED_FLIPKART, 'PASS' if match else 'FAIL'))
+            print(f"Expected Rs{EXPECTED_FLIPKART}: {'PASS' if match else 'FAIL'}")
             return match
     print('Flipkart FAILED')
     return False
 
 def test_amazon():
-    print("\n=== AMAZON MTR ===")
+    print('\\n=== AMAZON MTR ===')
     parser = AmazonParser()
     result = parser.parse_files([AMAZON_FILE])
     total = result['summary']['total_taxable'] if result else 0
-    print("Amazon total: Rs%.2f" % total)
+    print(f"Amazon total: Rs{total:.2f}")
     return bool(result)
 
 def test_meesho():
-    print("\n=== MEESHO ===")
+    print('\\n=== MEESHO ===')
     parser = MeeshoParser()
     result = parser.parse_files(MEESHO_FILES)
     total = result['summary']['total_taxable'] if result else 0
-    print("Meesho total: Rs%.2f" % total)
+    print(f"Meesho total: Rs{total:.2f}")
     return bool(result)
 
 def test_automerge():
-    print("\n=== AUTO MERGE ALL ===")
+    print('\\n=== AUTO MERGE ALL ===')
     all_files = [FLIPKART_FILE, AMAZON_FILE] + MEESHO_FILES
     parser = AutoMergeParser()
     result = parser.parse_files(all_files)
     total = result['summary']['total_taxable'] if result else 0
-    print("Merged total: Rs%.2f" % total)
+    print(f"Merged total: Rs{total:.2f}")
     return bool(result)
 
-print("GST REAL PRODUCTION TEST SUITE")
+print('GST REAL PRODUCTION TEST SUITE')
 
 passed = (
     test_flipkart() and
@@ -69,6 +70,6 @@ passed = (
     test_automerge()
 )
 
-print("\nOVERALL: %s" % ("PASS" if passed else "FAIL"))
+print(f'\\nOVERALL: {"PASS" if passed else "FAIL"}')
 sys.exit(0 if passed else 1)
 
