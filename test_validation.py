@@ -24,69 +24,8 @@ logger = logging.getLogger(__name__)
 # TEST DATA SETUP
 # =====================================================
 
-def create_meesho_sample():
-    """Create realistic Meesho sample CSV."""
-    data = {
-        'order_id': ['MES001', 'MES002', 'MES003', 'MES004', 'MES005'],
-        'state': ['Delhi', 'Maharashtra', 'Karnataka', 'Delhi', 'Gujarat'],
-        'taxable_value': [1000, 2000, 3000, 1500, 2500],
-        'igst': [0, 60, 90, 0, 75],
-        'cgst': [15, 0, 0, 22.5, 0],
-        'sgst': [15, 0, 0, 22.5, 0],
-    }
-    df = pd.DataFrame(data)
-    path = Path('test_data/meesho_sales.csv')
-    path.parent.mkdir(exist_ok=True)
-    df.to_csv(path, index=False)
-    logger.info(f"Created Meesho sample: {path}")
-    return path
-
-def create_meesho_return():
-    """Create realistic Meesho returns CSV."""
-    data = {
-        'order_id': ['MES-RET001', 'MES-RET002'],
-        'state': ['Delhi', 'Maharashtra'],
-        'taxable_value': [500, 1000],
-        'igst': [0, 30],
-        'cgst': [7.5, 0],
-        'sgst': [7.5, 0],
-    }
-    df = pd.DataFrame(data)
-    path = Path('test_data/meesho_returns_credit_note.csv')
-    path.parent.mkdir(exist_ok=True)
-    df.to_csv(path, index=False)
-    logger.info(f"Created Meesho returns: {path}")
-    return path
-
-def create_flipkart_sample():
-    """Create realistic Flipkart sample CSV."""
-    data = {
-        'invoice_no': ['FK001', 'FK002', 'FK003'],
-        'delivery_state': ['Haryana', 'Tamil Nadu', 'West Bengal'],
-        'sale_value': [5000, 10000, 7500],
-        'tax': [150, 300, 225],
-    }
-    df = pd.DataFrame(data)
-    path = Path('test_data/flipkart_sales.csv')
-    path.parent.mkdir(exist_ok=True)
-    df.to_csv(path, index=False)
-    logger.info(f"Created Flipkart sample: {path}")
-    return path
-
-def create_amazon_csv_sample():
-    """Create realistic Amazon sample CSV."""
-    data = {
-        'order_id': ['AMZ001', 'AMZ002', 'AMZ003', 'AMZ004'],
-        'ship_state': ['Bangalore', 'Chennai', 'Hyderabad', 'Pune'],
-        'tax_exclusive': [2000, 3000, 4000, 2500],
-        'igst': [60, 90, 120, 75],
-    }
-    df = pd.DataFrame(data)
-    path = Path('test_data/amazon_sales.csv')
-    path.parent.mkdir(exist_ok=True)
-    df.to_csv(path, index=False)
-    logger.info(f"Created Amazon sample: {path}")
-    return path
+# NO SYNTHETIC FILES - REAL PRODUCTION ONLY
+# Synthetic generators removed per production requirements
 
 # =====================================================
 # VALIDATION FUNCTIONS
