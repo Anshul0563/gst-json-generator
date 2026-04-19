@@ -296,9 +296,11 @@ def test_flipkart_all_states_mapping():
     if result and result['summary']['rows']:
         states_found = set()
         for row in result['summary']['rows']:
-            pos = row['pos']
-            states_found.add(pos)
-            print(f"  {row['invoice_no']}: State -> POS Code {pos}")
+            pos = row.get('pos')
+            if pos:
+                states_found.add(pos)
+                invoice = row.get('invoice_no', row.get('docs', ['N/A'])[0] if isinstance(row.get('docs'), list) else 'N/A')
+                print(f"  {invoice}: State -> POS Code {pos}")
         
         expected_states = 5
         actual_states = len(states_found)
