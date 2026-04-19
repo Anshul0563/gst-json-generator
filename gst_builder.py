@@ -8,11 +8,12 @@ class GSTBuilder:
     def __init__(self):
         self.version = "GST3.1.6"
 
-    # backward compatible method
+    # ===============================
+    # Main Build Methods
+    # ===============================
     def build_gstr1(self, parsed_data, gstin, fp):
         return self.build(parsed_data, gstin, fp)
 
-    # main builder
     def build(self, parsed_data, gstin, fp):
         summary = parsed_data.get("summary", {})
         rows = summary.get("rows", [])
@@ -72,6 +73,41 @@ class GSTBuilder:
             }
         }
 
+    # ===============================
+    # Validation Method
+    # ===============================
+    def validate_output(self, output):
+        errors = []
+
+        required_keys = [
+            "gstin", "fp", "version",
+            "b2cs", "summary"
+        ]
+
+        for key in required_keys:
+            if key not in output:
+                errors.append(f"Missing key: {key}")
+
+        if "summary" in output:
+            s = output["summary"]
+            for k in [
+                "total_taxable",
+                "total_igst",
+                "total_cgst",
+                "total_sgst",
+                "total_tax"
+            ]:
+                if k not in s:
+                    errors.append(f"Missing summary key: {k}")
+
+        return {
+            "valid": len(errors) == 0,
+            "errors": errors
+        }
+
+    # ===============================
+    # Save Methods
+    # ===============================
     def save_json(self, data, file_path):
         with open(file_path, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
