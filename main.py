@@ -1,9 +1,16 @@
+#!/usr/bin/env python3
 # main.py
+# GST JSON Generator Pro v2.0
 # ADVANCED APPLICATION WITH CONFIGURATION, LOGGING, AND ERROR HANDLING
 
 import sys
 import time
 from pathlib import Path
+
+# Ensure we're using Python 3.7+
+if sys.version_info < (3, 7):
+    print("Error: Python 3.7+ is required")
+    sys.exit(1)
 
 from PySide6.QtWidgets import QApplication
 
