@@ -1,0 +1,6 @@
+order_id,state,taxable_value,igst,cgst,sgst
+MES001,Delhi,1000,0,15.0,15.0
+MES002,Maharashtra,2000,60,0.0,0.0
+MES003,Karnataka,3000,90,0.0,0.0
+MES004,Delhi,1500,0,22.5,22.5
+MES005,Gujarat,2500,75,0.0,0.0
