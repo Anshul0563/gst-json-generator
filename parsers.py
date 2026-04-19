@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# parsers.py - FINAL PRODUCTION VERSION (Meesho + Amazon Merge)
+# parsers.py - FINAL FIXED PRODUCTION VERSION (Meesho + Amazon Merge)
 
 import pandas as pd
 from pathlib import Path
@@ -24,34 +24,37 @@ def safe(v):
 
 
 STATE = {
-    "01":"01","02":"02","03":"03","04":"04","05":"05","06":"06","07":"07",
-    "08":"08","09":"09","10":"10","11":"11","12":"12","13":"13","14":"14",
-    "15":"15","16":"16","17":"17","18":"18","19":"19","20":"20","21":"21",
-    "22":"22","23":"23","24":"24","25":"25","26":"26","27":"27","28":"28",
-    "29":"29","30":"30","31":"31","32":"32","33":"33","34":"34","35":"35",
-    "36":"36","37":"37","38":"38",
+    "01": "01", "02": "02", "03": "03", "04": "04", "05": "05",
+    "06": "06", "07": "07", "08": "08", "09": "09", "10": "10",
+    "11": "11", "12": "12", "13": "13", "14": "14", "15": "15",
+    "16": "16", "17": "17", "18": "18", "19": "19", "20": "20",
+    "21": "21", "22": "22", "23": "23", "24": "24", "25": "25",
+    "26": "26", "27": "27", "28": "28", "29": "29", "30": "30",
+    "31": "31", "32": "32", "33": "33", "34": "34", "35": "35",
+    "36": "36", "37": "37", "38": "38",
 
-    "delhi":"07","new delhi":"07",
-    "up":"09","uttar pradesh":"09","noida":"09","ghaziabad":"09",
-    "maharashtra":"27","mumbai":"27","pune":"27",
-    "karnataka":"29","bangalore":"29","bengaluru":"29",
-    "tamil nadu":"33","chennai":"33",
-    "telangana":"36","hyderabad":"36",
-    "rajasthan":"08",
-    "gujarat":"24",
-    "kerala":"32",
-    "west bengal":"19","kolkata":"19",
-    "haryana":"06","gurgaon":"06","gurugram":"06",
-    "punjab":"03",
-    "bihar":"10",
-    "odisha":"21",
-    "assam":"18",
-    "madhya pradesh":"23",
+    "delhi": "07", "new delhi": "07",
+    "up": "09", "uttar pradesh": "09", "noida": "09", "ghaziabad": "09",
+    "maharashtra": "27", "mumbai": "27", "pune": "27",
+    "karnataka": "29", "bangalore": "29", "bengaluru": "29",
+    "tamil nadu": "33", "chennai": "33",
+    "telangana": "36", "hyderabad": "36",
+    "rajasthan": "08",
+    "gujarat": "24",
+    "kerala": "32",
+    "west bengal": "19", "kolkata": "19",
+    "haryana": "06", "gurgaon": "06", "gurugram": "06",
+    "punjab": "03",
+    "bihar": "10",
+    "odisha": "21",
+    "assam": "18",
+    "madhya pradesh": "23",
 }
 
 
 def gst_state(x):
     s = str(x).strip().lower()
+
     if s in STATE:
         return STATE[s]
 
@@ -63,18 +66,8 @@ def gst_state(x):
     return None
 
 
-def split_tax(pos, amt, seller="07"):
-    amt = safe(amt)
-
-    if pos == seller:
-        half = round(amt / 2, 2)
-        return 0.0, half, half
-
-    return amt, 0.0, 0.0
-
-
 # =====================================================
-# BASE
+# BASE PARSER
 # =====================================================
 
 class BaseParser:
@@ -100,8 +93,9 @@ class BaseParser:
 
         df = pd.DataFrame(rows)
 
+        # Better deduplication
         df = df.drop_duplicates(
-            subset=["invoice_no", "pos", "taxable_value", "txn_type"]
+            subset=["invoice_no", "pos", "taxable_value", "igst", "cgst", "sgst", "txn_type"]
         ).reset_index(drop=True)
 
         grp = (
@@ -152,7 +146,7 @@ class BaseParser:
 
 
 # =====================================================
-# MEESHO
+# MEESHO PARSER
 # =====================================================
 
 class MeeshoParser(BaseParser):
@@ -166,19 +160,14 @@ class MeeshoParser(BaseParser):
             return []
 
         df = pd.read_excel(f) if f.endswith((".xlsx", ".xls")) else pd.read_csv(f)
-
         cols = {str(c).strip().lower(): c for c in df.columns}
 
         inv = cols.get("sub_order_num", list(df.columns)[0])
         st = cols.get("end_customer_state_new", cols.get("state"))
-        taxv = cols.get(
-            "total_taxable_sale_value",
-            cols.get("taxable_value", list(df.columns)[0])
-        )
+        taxv = cols.get("total_taxable_sale_value", cols.get("taxable_value"))
         tax = cols.get("tax_amount")
 
         is_return = "return" in name
-
         out = []
 
         for i, row in df.iterrows():
@@ -188,8 +177,13 @@ class MeeshoParser(BaseParser):
 
             val = safe(row.get(taxv))
 
+            # Tax logic
             if tax:
-                ig, cg, sg = split_tax(pos, row.get(tax), "07")
+                tax_amt = safe(row.get(tax))
+                if pos == "07":
+                    ig, cg, sg = 0.0, round(tax_amt / 2, 2), round(tax_amt / 2, 2)
+                else:
+                    ig, cg, sg = tax_amt, 0.0, 0.0
             else:
                 if pos == "07":
                     ig, cg, sg = 0.0, round(val * 0.015, 2), round(val * 0.015, 2)
@@ -197,13 +191,16 @@ class MeeshoParser(BaseParser):
                     ig, cg, sg = round(val * 0.03, 2), 0.0, 0.0
 
             if is_return:
-                val, ig, cg, sg = -abs(val), -abs(ig), -abs(cg), -abs(sg)
+                val = -abs(val)
+                ig = -abs(ig)
+                cg = -abs(cg)
+                sg = -abs(sg)
 
-            if abs(val) < 0.01 and abs(ig)+abs(cg)+abs(sg) < 0.01:
+            if abs(val) < 0.01 and abs(ig) + abs(cg) + abs(sg) < 0.01:
                 continue
 
             out.append({
-                "invoice_no": str(row.get(inv, i)),
+                "invoice_no": str(row.get(inv, i)).strip(),
                 "pos": pos,
                 "taxable_value": val,
                 "igst": ig,
@@ -216,7 +213,7 @@ class MeeshoParser(BaseParser):
 
 
 # =====================================================
-# AMAZON
+# AMAZON PARSER
 # =====================================================
 
 class AmazonParser(BaseParser):
@@ -226,7 +223,7 @@ class AmazonParser(BaseParser):
     def read_one(self, f):
         name = Path(f).name.lower()
 
-        if not (".csv" in name or "amazon" in name or "mtr" in name):
+        if not ("amazon" in name or "mtr" in name or name.endswith(".csv")):
             return []
 
         try:
@@ -235,7 +232,6 @@ class AmazonParser(BaseParser):
             df = pd.read_csv(f, encoding="latin1")
 
         cols = {str(c).strip().lower(): c for c in df.columns}
-
         out = []
 
         for i, row in df.iterrows():
@@ -244,27 +240,24 @@ class AmazonParser(BaseParser):
                 continue
 
             val = safe(row.get(cols.get("tax_exclusive_gross")))
-
             ig = safe(row.get(cols.get("igst_tax")))
             cg = safe(row.get(cols.get("cgst_tax")))
-            sg = safe(row.get(cols.get("sgst_tax"))) + safe(
-                row.get(cols.get("utgst_tax"))
-            )
+            sg = safe(row.get(cols.get("sgst_tax"))) + safe(row.get(cols.get("utgst_tax")))
 
-            typ = str(
-                row.get(cols.get("transaction_type"), "shipment")
-            ).strip().lower()
-
+            typ = str(row.get(cols.get("transaction_type"), "shipment")).strip().lower()
             is_return = typ in ["refund", "cancel", "cancelled"] or val < 0
 
             if is_return:
-                val, ig, cg, sg = -abs(val), -abs(ig), -abs(cg), -abs(sg)
+                val = -abs(val)
+                ig = -abs(ig)
+                cg = -abs(cg)
+                sg = -abs(sg)
 
-            if abs(val) < 0.01 and abs(ig)+abs(cg)+abs(sg) < 0.01:
+            if abs(val) < 0.01 and abs(ig) + abs(cg) + abs(sg) < 0.01:
                 continue
 
             out.append({
-                "invoice_no": str(row.get(cols.get("invoice_number"), i)),
+                "invoice_no": str(row.get(cols.get("invoice_number"), i)).strip(),
                 "pos": pos,
                 "taxable_value": val,
                 "igst": ig,
@@ -277,34 +270,34 @@ class AmazonParser(BaseParser):
 
 
 # =====================================================
+# FLIPKART DUMMY (for main.py import compatibility)
+# =====================================================
+
+class FlipkartParser(BaseParser):
+    PLATFORM = "Flipkart"
+    ETIN = "07AACCF0683K1CU"
+
+    def read_one(self, f):
+        return []
+
+
+# =====================================================
 # AUTO MERGE
 # =====================================================
 
 class AutoMergeParser:
     def parse_files(self, files, seller_gstin=None):
-        meesho_files = []
-        amazon_files = []
-
-        for f in files:
-            name = Path(f).name.lower()
-
-            if "meesho" in name or "tcs_sales" in name:
-                meesho_files.append(f)
-
-            elif "amazon" in name or "mtr" in name or name.endswith(".csv"):
-                amazon_files.append(f)
-
         results = []
 
-        if meesho_files:
-            r = MeeshoParser().parse_files(meesho_files, seller_gstin)
-            if r:
-                results.append(r)
+        parser_list = [
+            MeeshoParser(),
+            AmazonParser(),
+        ]
 
-        if amazon_files:
-            r = AmazonParser().parse_files(amazon_files, seller_gstin)
-            if r:
-                results.append(r)
+        for parser in parser_list:
+            res = parser.parse_files(files, seller_gstin)
+            if res:
+                results.append(res)
 
         docs = []
         seen = set()
@@ -316,6 +309,9 @@ class AutoMergeParser:
                         d["invoice_no"],
                         d["pos"],
                         round(d["txval"], 2),
+                        round(d["igst_amt"], 2),
+                        round(d["cgst_amt"], 2),
+                        round(d["sgst_amt"], 2),
                         d["txn_type"],
                     )
                     if key not in seen:
@@ -332,8 +328,8 @@ class AutoMergeParser:
         )
 
         for d in docs:
-            sign = -1 if d["txn_type"] == "return" else 1
             p = d["pos"]
+            sign = -1 if d["txn_type"] == "return" else 1
 
             state[p]["taxable_value"] += sign * d["txval"]
             state[p]["igst"] += sign * d["igst_amt"]
@@ -341,7 +337,6 @@ class AutoMergeParser:
             state[p]["sgst"] += sign * d["sgst_amt"]
 
         rows = []
-
         for pos in sorted(state.keys()):
             vals = state[pos]
 
@@ -376,4 +371,7 @@ class AutoMergeParser:
             ],
             "invoice_docs": [d for d in docs if d["txn_type"] == "sale"],
             "credit_docs": [d for d in docs if d["txn_type"] == "return"],
+            "doc_issue": {
+                "doc_det": []
+            }
         }
