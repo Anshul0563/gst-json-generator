@@ -758,10 +758,10 @@ class BaseParser:
         final = pd.concat(all_rows, ignore_index=True)
         logger.info(f"Combined {len(final)} rows before dedup")
         
-        # Clean invoice numbers with fallback to row_id
+        # Clean invoice numbers with fallback, ensure uniqueness
         final['invoice_no'] = final.apply(
             lambda row: clean_invoice_no(row['invoice_no']) or
-                       f"{self.PLATFORM.upper()}_{row['pos']}_{row['row_id']}",
+                       f"{self.PLATFORM}_{row.get('source_key', row['row_id'])}",
             axis=1
         )
         
@@ -992,26 +992,27 @@ class FlipkartParser(BaseParser):
                 
                 # ========== EXCEL FILES (.xlsx, .xls) ==========
                 if path.suffix.lower() in {'.xlsx', '.xls'}:
-                    xl = pd.ExcelFile(file)
-                    excel_processed = False
-                    
-                    # --- Sales Report Sheet ---
-                    if 'Sales Report' in xl.sheet_names:
-                        sales_df = self._process_sales_report(file, xl)
-                        if sales_df is not None and not sales_df.empty:
-                            dfs.append((sales_df, file))
-                            excel_processed = True
-                    
-                    # --- Cash Back Report Sheet ---
-                    if 'Cash Back Report' in xl.sheet_names:
-                        cashback_df = self._process_cashback_report(file, xl)
-                        if cashback_df is not None and not cashback_df.empty:
-                            dfs.append((cashback_df, file + '#cashback'))
-                            excel_processed = True
-                    
-                    if excel_processed:
-                        logger.info(f"Excel processed: {Path(file).name}")
-                        continue
+                    try:
+                        xl = pd.ExcelFile(file)
+                        logger.info(f"Flipkart Excel detected: {Path(file).name} - sheets: {xl.sheet_names}")
+                        
+                        # Always process Sales Report if present (robust detection)
+                        if any('sales report' in name.lower() for name in xl.sheet_names):
+                            sales_df = self._process_sales_report(file, xl)
+                            if sales_df is not None and not sales_df.empty:
+                                dfs.append((sales_df, f"{file}#sales"))
+                                logger.info(f"✓ Sales Report processed: {len(sales_df)} rows")
+                        
+                        # Always process Cash Back if present
+                        if any('cash back' in name.lower() for name in xl.sheet_names):
+                            cashback_df = self._process_cashback_report(file, xl)
+                            if cashback_df is not None and not cashback_df.empty:
+                                dfs.append((cashback_df, f"{file}#cashback"))
+                                logger.info(f"✓ Cash Back processed: {len(cashback_df)} rows")
+                        
+                    except Exception as e:
+                        logger.error(f"Excel processing error {file}: {str(e)[:60]}")
+                    continue
                 
                 # ========== CSV FILES ==========
                 if path.suffix.lower() == '.csv':
@@ -1048,22 +1049,25 @@ class FlipkartParser(BaseParser):
                 logger.warning("Sales Report is empty")
                 return None
             
-            logger.info(f"Sales Report: {len(cleaned)} total rows")
+            logger.info(f"🔍 Sales Report RAW: {len(cleaned)} rows")
             
-            # Detect columns
-            event_type_col = find_col(cleaned.columns.tolist(), ['event_type', 'type'])
-            event_subtype_col = find_col(cleaned.columns.tolist(), ['event_sub_type', 'sub_type'])
-            invoice_col = find_col(cleaned.columns.tolist(), ['buyer_invoice_id', 'invoice_id', 'invoice', 'id'])
+            # Enhanced column detection for real Flipkart files
+            event_type_col = find_col(cleaned.columns.tolist(), ['event_type', 'type', 'event'])
+            event_subtype_col = find_col(cleaned.columns.tolist(), ['event_sub_type', 'sub_type', 'subtype'])
+            invoice_col = find_col(cleaned.columns.tolist(), ['buyer_invoice_id', 'invoice_id', 'invoice_no', 'invoice', 'id'])
             order_col = find_col(cleaned.columns.tolist(), ['order_id', 'order', 'order_no'])
             state_col = find_col(cleaned.columns.tolist(), 
-                                ["customer's_delivery_state", 'customer_delivery_state', 
-                                 'delivery_state', 'state', 'destination_state'])
+                                ["customer's_delivery_state", 'customer_delivery_state', 'customer_delivery_state',
+                                 'delivery_state', 'state', 'destination_state', 'ship_to_state'])
             
-            # CRITICAL: Use TAXABLE VALUE, not invoice amount
+            # CRITICAL: Prioritize real taxable columns from Flipkart Feb files
             taxable_col = find_col(cleaned.columns.tolist(), 
                                   ['taxable_value_final_invoice_amount_taxes',
                                    'taxable_value_final_invoice_amount_taxe',
-                                   'taxable_value', 'tax_exclusive', 'net_amount', 'sale_value'])
+                                   'sale_value_final', 'sale_value', 'taxable_value', 
+                                   'tax_exclusive_gross', 'tax_exclusive', 'net_amount'])
+            
+            logger.info(f"  Cols found - event_type: {event_type_col}, state: {state_col}, taxable: {taxable_col}")
             
             igst_col = find_col(cleaned.columns.tolist(), ['igst_amount', 'igst', 'integrated_tax'])
             cgst_col = find_col(cleaned.columns.tolist(), ['cgst_amount', 'cgst', 'central_tax'])
@@ -1150,17 +1154,19 @@ class FlipkartParser(BaseParser):
                 logger.info("Cash Back Report is empty")
                 return None
             
-            logger.info(f"Cash Back Report: {len(cleaned)} total rows")
+            logger.info(f"🔍 Cash Back Report RAW: {len(cleaned)} rows")
             
-            # Detect columns
-            doc_type_col = find_col(cleaned.columns.tolist(), ['document_type', 'doc_type', 'type'])
+            # Enhanced column detection
+            doc_type_col = find_col(cleaned.columns.tolist(), ['document_type', 'doc_type', 'type', 'document'])
             invoice_col = find_col(cleaned.columns.tolist(), 
-                                  ['credit_note_id', 'debit_note_id', 'note_id', 'id', 'invoice_id'])
+                                  ['credit_note_id', 'credit_note', 'debit_note_id', 'note_id', 'invoice_id', 'invoice_no'])
             state_col = find_col(cleaned.columns.tolist(), 
                                 ["customer's_delivery_state", 'customer_delivery_state', 
-                                 'delivery_state', 'state', 'destination_state'])
+                                 'delivery_state', 'state', 'destination_state', 'ship_to_state'])
             taxable_col = find_col(cleaned.columns.tolist(), 
-                                  ['taxable_value', 'net_amount', 'amount', 'value', 'sale_value'])
+                                  ['taxable_value', 'sale_value', 'net_amount', 'amount', 'value'])
+            
+            logger.info(f"  Cashback cols - doc_type: {doc_type_col}, state: {state_col}, taxable: {taxable_col}")
             
             igst_col = find_col(cleaned.columns.tolist(), ['igst_amount', 'igst', 'integrated_tax'])
             cgst_col = find_col(cleaned.columns.tolist(), ['cgst_amount', 'cgst', 'central_tax'])
@@ -1174,9 +1180,11 @@ class FlipkartParser(BaseParser):
             # Filter ONLY credit notes (Document Type contains 'CREDIT')
             cash_filtered = cleaned.copy()
             if doc_type_col:
+                # STRICT: Match 'CREDIT' or 'Credit Note' exactly for real files
                 cash_filtered = cash_filtered[
-                    cash_filtered[doc_type_col].astype(str).str.strip().str.upper().str.contains('CREDIT', na=False)
+                    cash_filtered[doc_type_col].astype(str).str.strip().str.upper().str.contains('CREDIT|NOTE', na=False)
                 ].copy()
+                logger.info(f"  Filtered CREDIT/NOTE rows: {len(cash_filtered)}")
             
             logger.info(f"After filtering (Document Type=CREDIT): {len(cash_filtered)} rows")
             
