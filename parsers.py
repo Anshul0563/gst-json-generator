@@ -223,8 +223,16 @@ def split_tax_amount(pos: Optional[str], tax_amount: Any, seller_state_code: Opt
     return amount, 0.0, 0.0
 
 
+def normalize_doc_list(items: List[Any]) -> List[Dict[str, Any]]:\n    """Normalize document list to consistent dict format with 'invoice_no' key.\n    Supports mixed input: strings, dicts, None, empty.\n    """\n    normalized = []\n    for item in items:\n        if item is None or item == '':\n            continue\n        invoice_no = None\n        if isinstance(item, dict):\n            invoice_no = clean_invoice_no(item.get('invoice_no'))\n        elif isinstance(item, str):\n            invoice_no = clean_invoice_no(item)\n        if invoice_no:\n            normalized.append({'invoice_no': invoice_no})\n    return normalized
+
+
 def build_doc_issue_details(invoice_docs: List[Dict[str, Any]], credit_docs: List[Dict[str, Any]], debit_docs: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Build document issue ranges from invoice-style documents."""
+    \"\"\"Build document issue ranges from invoice-style documents.\"\"\"
+    # Normalize inputs to consistent format
+    invoice_docs = normalize_doc_list(invoice_docs)
+    credit_docs = normalize_doc_list(credit_docs)
+    debit_docs = normalize_doc_list(debit_docs)
+
     def normalize_doc_value(value: Any) -> Optional[str]:
         return clean_invoice_no(value)
 
@@ -261,49 +269,49 @@ def build_doc_issue_details(invoice_docs: List[Dict[str, Any]], credit_docs: Lis
                 current_group.append(value)
             else:
                 ranges.append({
-                    "from": current_group[0],
-                    "to": current_group[-1],
-                    "totnum": len(current_group),
-                    "cancel": 0,
-                    "net_issue": len(current_group)
+                    \"from\": current_group[0],
+                    \"to\": current_group[-1],
+                    \"totnum\": len(current_group),
+                    \"cancel\": 0,
+                    \"net_issue\": len(current_group)
                 })
                 current_group = [value]
 
         ranges.append({
-            "from": current_group[0],
-            "to": current_group[-1],
-            "totnum": len(current_group),
-            "cancel": 0,
-            "net_issue": len(current_group)
+            \"from\": current_group[0],
+            \"to\": current_group[-1],
+            \"totnum\": len(current_group),
+            \"cancel\": 0,
+            \"net_issue\": len(current_group)
         })
         return ranges
 
     def make_bucket(doc_num: int, doc_typ: str, docs: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         invoice_numbers = [
-            normalize_doc_value(doc.get('invoice_no'))
+            normalize_doc_value(doc.get('invoice_no') if isinstance(doc, dict) else doc)
             for doc in docs
-            if normalize_doc_value(doc.get('invoice_no'))
+            if normalize_doc_value(doc.get('invoice_no') if isinstance(doc, dict) else doc)
         ]
         ranges = make_ranges(invoice_numbers)
         if not ranges:
             return None
         return {
-            "doc_num": doc_num,
-            "doc_typ": doc_typ,
-            "docs": ranges
+            \"doc_num\": doc_num,
+            \"doc_typ\": doc_typ,
+            \"docs\": ranges
         }
 
     doc_det = []
     for doc_num, label, docs in [
-        (1, "Invoices for outward supply", invoice_docs),
-        (5, "Credit Note", credit_docs),
-        (6, "Debit Note", debit_docs),
+        (1, \"Invoices for outward supply\", invoice_docs),
+        (5, \"Credit Note\", credit_docs),
+        (6, \"Debit Note\", debit_docs),
     ]:
         bucket = make_bucket(doc_num, label, docs)
         if bucket:
             doc_det.append(bucket)
 
-    return {"doc_det": doc_det}
+    return {\"doc_det\": doc_det}
 
 
 def make_preparsed_df(records: List[Dict[str, Any]], platform: str) -> pd.DataFrame:
