@@ -1,6 +1,0 @@
-order_id,state,taxable_value,igst
-M001,Delhi,1000,150
-,Mumbai,2000,200
-M003,,3000,
-,Bangalore,4000,120
-M005,Unknown City,5000,150
