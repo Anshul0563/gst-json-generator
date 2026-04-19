@@ -1,36 +1,34 @@
-# Flipkart February Business Rule Reverse-Engineering
+# GST-Tool Flipkart Real File Fixes using ORIGINAL Data
+Status: IMPLEMENTING (Phase 2/7)
 
-Status: IMPLEMENTING
+## Approved Plan Steps:
 
-## Steps to Complete (Approved Plan):
+### ✅ Phase 1: Analysis Complete
+- Real Flipkart = Excel (Sales Report + Cash Back Report sheets)
+- MTR CSV = Amazon only (no changes)
+- Current mismatch: Wrong row filtering/duplicates
 
-### Phase 1: Analysis ✅
-- ✅ Read Feb raw Excel content/structure
-- ✅ Identify relevant sheets/columns  
-- ✅ Count matching rows vs JSON b2cs
-- ✅ Run current parser on Feb raw → 1127.19 baseline
+### 🔄 Phase 2: FlipkartParser Excel Robustness [EDITING parsers.py]
+- Detect by sheet names regardless filename
+- Sales Report: Event Type='SALE' + Event Sub Type='SALE'
+- Cash Back: Document Type='CREDIT'/'Credit Note'
+- source_key prevents duplicates
+- Debug logs: row counts, totals
 
-### Phase 2: Rule Detection ✅
-- ✅ Detect exclusion: Event Type != 'Sale', Cashback credits
-- ✅ Map raw → expected logic confirmed
+### ⏳ Phase 3: Edit parsers.py Complete → Test
+```
+cd /home/jarvis/Documents/IT/GST-Tool
+python3 -c "from parsers import FlipkartParser; p=FlipkartParser(); r=p.parse_files(['test_data/flipkart_variants/1f1924de-add8-4717-8998-64952c2dc16e_1773998487000.xlsx']); print(r['summary'] if r else 'FAIL')"
+```
 
-### Phase 3: Patch ✅
-- ✅ Update FlipkartParser.read_files()
-- ✅ Filter Event Type/Sub Type == 'Sale' → use filtered sales_df.iterrows()
-- ✅ Cashback: Document Type='Credit Note' → use filtered cash_df.iterrows()  
-- ✅ Ensure zero-tax rows if taxes>0
+### ⏳ Phase 4: Full test_data/ AutoMergeParser
+```
+python3 -c "from parsers import AutoMergeParser; p=AutoMergeParser(); r=p.parse_files(['test_data/']); print(r['summary'] if r else 'FAIL')"
+```
 
-### Phase 4: Tests ✅
-- ✅ test_flipkart_feb_analysis.py validation (Flipkart txval=1713.57, Sales 17 rows, Cashback 5 rows)
-- ⏳ March regression  
-- ⏳ test_validation.py full run
+### ⏳ Phase 5: Validate vs gst_output.json totals (Feb/March)
+### ⏳ Phase 6: gst_builder.py → GSTR1 JSON
+### ⏳ Phase 7: attempt_completion with proof
 
-### Phase 5: Verify ⏳
-- ⏳ Feb proof results vs accepted JSON (full txval=3727.18, Flipkart reconciliation pending)
-- ⏳ March proof results  
-- ⏳ Future-proof confirmation
-
-**Current Step 2/7**: Reconcile remaining Flipkart excess vs accepted JSON
-
-**Current Step 1/7**: Editing parsers.py → Fix filtered df usage in loops
+**Next: Edit parsers.py → FlipkartParser.read_files() + _process_sales_report() + _process_cashback_report()**
 

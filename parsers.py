@@ -613,6 +613,17 @@ class BaseParser:
         if self.detect_template_adapter(df, file_path):
             return True
 
+        # Flipkart Excel sheet detection
+        if self.PLATFORM == "Flipkart" and Path(file_path).suffix.lower() in {'.xlsx', '.xls'}:
+            try:
+                xl = pd.ExcelFile(file_path)
+                if any('sales report' in name.lower() for name in xl.sheet_names):
+                    return True
+                if any('cash back' in name.lower() for name in xl.sheet_names):
+                    return True
+            except:
+                pass
+
         cleaned = clean_cols(df)
         normalized_cols = {normalize_identifier(col) for col in cleaned.columns.tolist()}
         matches = sum(
