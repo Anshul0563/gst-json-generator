@@ -193,7 +193,7 @@ class AmazonParser(Base):
 
 
 class AutoMergeParser:
-    def parse_files(self, files):
+    def parse_files(self, files, seller_gstin=None):
         results = []
 
         for parser in [MeeshoParser(), AmazonParser()]:
