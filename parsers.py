@@ -1,7 +1,7 @@
 """
 parsers.py - PRODUCTION-GRADE PLATFORM PARSERS
 - Meesho, Flipkart, Amazon with dedicated parsers
-- AutoMergeParser for multi-platform consolidation
+- AutoMergeParser for multi-platform consolidation - FIXED DEDUPLICATION
 - Production-ready error handling and logging
 - Focus on data accuracy and completeness
 """
@@ -1316,81 +1316,122 @@ class AmazonParser(BaseParser):
 
 
 # =====================================================
-# AUTO MERGE PARSER - MULTI-PLATFORM CONSOLIDATION
+# AUTO MERGE PARSER - MULTI-PLATFORM CONSOLIDATION (FIXED)
 # =====================================================
 
 class AutoMergeParser:
     """
-    Consolidates results from all platform parsers.
-    - Meesho, Flipkart, Amazon
-    - Merges by state (pos)
-    - Aggregates taxes correctly
-    - Maintains CLTTX supplier details
-    - Consolidates credit_docs for returns
+    Consolidates results from all platform parsers - DEDUPLICATION FIXED
+    - Route files to correct parsers only
+    - Cross-platform invoice deduplication by (invoice_no, pos, taxable_value)
+    - Rebuild totals from deduplicated docs only
+    - Preserve CLTTX, doc_issue, credit_docs
     """
     
     def parse_files(self, files: List[str], seller_gstin: Optional[str] = None) -> Dict[str, Any]:
-        """Parse all platforms and merge results."""
-        parsers = [MeeshoParser(), FlipkartParser(), AmazonParser()]
+        """Parse platforms with proper file routing + deduplication."""
+        # File routing based on filename patterns
+        flipkart_files = [f for f in files if 'flipkart' in Path(f).name.lower() or Path(f).suffix.lower() in {'.xlsx', '.xls'}]
+        amazon_files = [f for f in files if 'mtr' in Path(f).name.lower() or 'amazon' in Path(f).name.lower()]
+        meesho_files = [f for f in files if any(p in Path(f).name.lower() for p in ['tcs_sales', 'tax_invoice_details'])]
+        
+        logger.info("🚀 PARSING FILES FOR ALL PLATFORMS - ROUTING")
+        logger.info(f"  Flipkart: {len(flipkart_files)} files")
+        logger.info(f"  Amazon: {len(amazon_files)} files") 
+        logger.info(f"  Meesho: {len(meesho_files)} files")
+        
+        # Execute parsers on ROUTED files only
+        parsers = [
+            (FlipkartParser(), flipkart_files),
+            (AmazonParser(), amazon_files),
+            (MeeshoParser(), meesho_files)
+        ]
+        
         results = []
+        for parser, routed_files in parsers:
+            if routed_files:
+                try:
+                    result = parser.parse_files(routed_files, seller_gstin)
+                    if result:
+                        results.append(result)
+                        logger.info(f"✓ {parser.PLATFORM}: {result['summary']['total_taxable']:.2f}")
+                except Exception as e:
+                    logger.error(f"{parser.PLATFORM} failed: {str(e)}")
         
-        logger.info("🚀 PARSING FILES FOR ALL PLATFORMS")
-        for file in files:
-            logger.info(f"  📄 {Path(file).name}")
-        
-        # Execute all parsers
-        for parser in parsers:
-            try:
-                result = parser.parse_files(files, seller_gstin=seller_gstin)
-                if result:
-                    results.append(result)
-            except Exception as e:
-                logger.error(f"Parser {parser.PLATFORM} failed: {str(e)[:60]}")
-        
-        # If no results, return empty structure
         if not results:
-            logger.warning("❌ No data found from any parser")
-            return {
-                "summary": {
-                    "rows": [],
-                    "total_taxable": 0.0,
-                    "total_igst": 0.0,
-                    "total_cgst": 0.0,
-                    "total_sgst": 0.0
-                },
-                "invoice_docs": [],
-                "credit_docs": [],
-                "debit_docs": [],
-                "clttx": [],
-                "doc_issue": {"doc_det": []},
-                "seller_state_code": extract_state_code_from_gstin(seller_gstin)
-            }
+            logger.warning("❌ No data from any parser")
+            return self._empty_result(seller_gstin)
         
-        # MERGE: Aggregate all state totals across all parsers
-        state_totals = defaultdict(lambda: {
-            'taxable_value': 0.0,
-            'igst': 0.0,
-            'cgst': 0.0,
-            'sgst': 0.0
-        })
-        clttx = []
+        # =====================================================
+        # CROSS-PLATFORM DEDUPLICATION - THE KEY FIX
+        # =====================================================
         all_invoice_docs = []
-        all_credit_docs = []
-        all_invoice_doc_numbers = []
-        all_credit_doc_numbers = []
-        all_debit_doc_numbers = []
-        seller_state_code = extract_state_code_from_gstin(seller_gstin)
+        doc_seen = set()
+        duplicates_removed = 0
+        
+        logger.info(f"Merging {len(results)} platform results...")
+        logger.info(f"Before dedup docs: {[r['summary']['total_taxable'] for r in results]}")
         
         for result in results:
-            # Merge per-state totals
-            for row in result['summary']['rows']:
-                pos = str(row['pos'])
-                state_totals[pos]['taxable_value'] += row['taxable_value']
-                state_totals[pos]['igst'] += row['igst']
-                state_totals[pos]['cgst'] += row['cgst']
-                state_totals[pos]['sgst'] += row['sgst']
+            for doc in result.get('invoice_docs', []):
+                key = (doc['invoice_no'], doc['pos'], round(doc['txval'], 2))
+                if key not in doc_seen:
+                    doc_seen.add(key)
+                    all_invoice_docs.append(doc)
+                else:
+                    duplicates_removed += 1
             
-            # Create supplier entry (CLTTX)
+            for doc in result.get('credit_docs', []):
+                key = (doc['invoice_no'], doc['pos'], round(doc['txval'], 2))
+                if key not in doc_seen:
+                    doc_seen.add(key)
+                    all_invoice_docs.append(doc)  # Credit docs treated as negative invoices
+                else:
+                    duplicates_removed += 1
+        
+        logger.info(f"Deduplicated: {duplicates_removed} docs removed")
+        logger.info(f"Final docs: {len(all_invoice_docs)}")
+        
+        # Rebuild summary from deduplicated docs
+        state_totals = defaultdict(lambda: {
+            'taxable_value': 0.0, 'igst': 0.0, 'cgst': 0.0, 'sgst': 0.0
+        })
+        
+        for doc in all_invoice_docs:
+            pos = doc['pos']
+            txval = doc['txval']
+            igst_amt = doc.get('igst_amt', 0.0)
+            cgst_amt = doc.get('cgst_amt', 0.0)
+            sgst_amt = doc.get('sgst_amt', 0.0)
+            
+            # Credit docs have positive txval but negative taxes - adjust sign
+            if 'credit' in doc.get('invoice_no', '').lower() or txval < 0:
+                sign = -1
+            else:
+                sign = 1
+                
+            state_totals[pos]['taxable_value'] += sign * txval
+            state_totals[pos]['igst'] += sign * safe_num(igst_amt)
+            state_totals[pos]['cgst'] += sign * safe_num(cgst_amt)
+            state_totals[pos]['sgst'] += sign * safe_num(sgst_amt)
+        
+        # Convert to summary rows
+        rows = []
+        for pos, amounts in state_totals.items():
+            if any(abs(amounts[k]) > 0.01 for k in amounts):
+                rows.append({
+                    'pos': str(pos),
+                    'taxable_value': round(amounts['taxable_value'], 2),
+                    'igst': round(amounts['igst'], 2),
+                    'cgst': round(amounts['cgst'], 2),
+                    'sgst': round(amounts['sgst'], 2)
+                })
+        
+        rows = sorted(rows, key=lambda row: row['pos'])
+        
+        # CLTTX (preserve supplier totals - pre-dedup)
+        clttx = []
+        for result in results:
             clttx.append({
                 'etin': result['etin'],
                 'suppval': result['summary']['total_taxable'],
@@ -1400,61 +1441,60 @@ class AutoMergeParser:
                 'cess': 0.0,
                 'flag': 'N'
             })
-            
-            # Collect credit docs (returns)
-            if result['invoice_docs']:
-                all_invoice_docs.extend(result['invoice_docs'])
-            if result['credit_docs']:
-                all_credit_docs.extend(result['credit_docs'])
-            all_invoice_doc_numbers.extend(result.get('invoice_doc_numbers', []))
-            all_credit_doc_numbers.extend(result.get('credit_doc_numbers', []))
-            all_debit_doc_numbers.extend(result.get('debit_doc_numbers', []))
+        clttx = sorted(clttx, key=lambda r: r['etin'])
         
-        # Convert state_totals back to list
-        rows = []
-        for pos, amounts in state_totals.items():
-            rows.append({
-                'pos': str(pos),
-                'taxable_value': round(amounts['taxable_value'], 2),
-                'igst': round(amounts['igst'], 2),
-                'cgst': round(amounts['cgst'], 2),
-                'sgst': round(amounts['sgst'], 2)
-            })
+        # Grand totals from deduplicated data
+        total_taxable = sum(r['taxable_value'] for r in rows)
+        total_igst = sum(r['igst'] for r in rows)
+        total_cgst = sum(r['cgst'] for r in rows)
+        total_sgst = sum(r['sgst'] for r in rows)
         
-        rows = sorted(rows, key=lambda row: str(row['pos']))
-        clttx = sorted(clttx, key=lambda row: row['etin'])
-        all_invoice_docs = sorted(all_invoice_docs, key=lambda row: (str(row['pos']), str(row['invoice_no'])))
-        all_credit_docs = sorted(all_credit_docs, key=lambda row: (str(row['pos']), str(row['invoice_no'])))
-
-        # Calculate grand totals
-        grand_total_taxable = sum(r['taxable_value'] for r in rows)
-        grand_total_igst = sum(r['igst'] for r in rows)
-        grand_total_cgst = sum(r['cgst'] for r in rows)
-        grand_total_sgst = sum(r['sgst'] for r in rows)
+        # Collect unique document numbers
+        all_invoice_doc_numbers = list({d['invoice_no'] for d in all_invoice_docs if d.get('txval', 0) > 0})
+        all_credit_doc_numbers = list({d['invoice_no'] for d in all_invoice_docs if d.get('txval', 0) < 0})
         
-        logger.info(f"✓ Merged {len(results)} platforms, {len(rows)} states")
+        logger.info(f"DEDUPLICATED TOTALS: Rs{total_taxable:.2f}")
+        logger.info(f"✓ Deduplicated merged: {len(rows)} states")
         
         return {
-            "seller_state_code": seller_state_code,
+            "seller_state_code": extract_state_code_from_gstin(seller_gstin),
             "invoice_doc_numbers": all_invoice_doc_numbers,
             "credit_doc_numbers": all_credit_doc_numbers,
-            "debit_doc_numbers": all_debit_doc_numbers,
+            "debit_doc_numbers": [],
             "summary": {
                 "rows": rows,
-                "total_taxable": round(grand_total_taxable, 2),
-                "total_igst": round(grand_total_igst, 2),
-                "total_cgst": round(grand_total_cgst, 2),
-                "total_sgst": round(grand_total_sgst, 2)
+                "total_taxable": round(total_taxable, 2),
+                "total_igst": round(total_igst, 2),
+                "total_cgst": round(total_cgst, 2),
+                "total_sgst": round(total_sgst, 2)
             },
-            "invoice_docs": all_invoice_docs,
-            "credit_docs": all_credit_docs,
+            "invoice_docs": [d for d in all_invoice_docs if d.get('txval', 0) >= 0],
+            "credit_docs": [d for d in all_invoice_docs if d.get('txval', 0) < 0],
             "debit_docs": [],
             "clttx": clttx,
-            "doc_issue": build_doc_issue_details(all_invoice_doc_numbers, all_credit_doc_numbers, all_debit_doc_numbers)
+            "doc_issue": build_doc_issue_details(all_invoice_doc_numbers, all_credit_doc_numbers, [])
+        }
+    
+    def _empty_result(self, seller_gstin: Optional[str]) -> Dict[str, Any]:
+        """Return empty result structure."""
+        return {
+            "summary": {
+                "rows": [],
+                "total_taxable": 0.0,
+                "total_igst": 0.0,
+                "total_cgst": 0.0,
+                "total_sgst": 0.0
+            },
+            "invoice_docs": [],
+            "credit_docs": [],
+            "debit_docs": [],
+            "clttx": [],
+            "doc_issue": {"doc_det": []},
+            "seller_state_code": extract_state_code_from_gstin(seller_gstin)
         }
 
 
 if __name__ == "__main__":
-    print("parsers.py loaded successfully")
-    print("FlipkartParser available:", hasattr(__import__('parsers'), 'FlipkartParser'))
+    print("parsers.py loaded successfully - DEDUPLICATION FIXED")
+    print("AutoMergeParser available:", hasattr(__import__('parsers'), 'AutoMergeParser'))
 
