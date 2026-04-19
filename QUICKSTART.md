@@ -1,53 +1,217 @@
-# GST JSON Generator Pro - Quick Start Guide
+# Quick Start Guide - GST JSON Generator Pro
 
-## 🚀 Getting Started in 5 Minutes
+**Get started in 5 minutes**
 
-### 1. Install Dependencies
+---
+
+## 1️⃣ Install (Pick One)
+
+### Option A: Automatic (Recommended)
 ```bash
-cd /path/to/GST-Tool
+git clone https://github.com/Anshul0563/gst-json-generator-pro.git
+cd gst-json-generator-pro
+
+# Linux/macOS
+chmod +x run.sh
+./run.sh
+
+# Windows
+run.bat
+```
+
+### Option B: Manual
+```bash
+git clone https://github.com/Anshul0563/gst-json-generator-pro.git
+cd gst-json-generator-pro
+python3 -m venv venv
+source venv/bin/activate  # or venv\Scripts\activate on Windows
 pip install -r requirements.txt
-```
-
-### 2. Configure (Optional)
-Edit `config.json` if you need custom settings:
-```json
-{
-  "output": {
-    "output_dir": "./output"
-  },
-  "gst": {
-    "default_tax_rate": 3.0
-  }
-}
-```
-
-### 3. Run Application
-```bash
 python3 main.py
 ```
 
-### 4. Use the UI
-- Add Excel/CSV files
-- Select parsing mode (Auto Merge, Meesho, Flipkart, Amazon)
-- Enter GSTIN and Period (MMYYYY)
-- Select export formats (JSON, CSV, Excel)
-- Click "GENERATE GST JSON"
+---
 
-## 📊 Export Formats
+## 2️⃣ Prepare Your Files
 
-### JSON (Default)
-- Full structured output
-- Complete data preservation
-- Ready for integration
+### Get Reports From Platforms
 
-### CSV (New!)
-- Tabular format
-- Easy to view in spreadsheets
-- Suitable for reports
+**Meesho:**
+1. Log in to Seller Dashboard
+2. Reports → Tax Invoice Details (or TCS Sales Report)
+3. Download Excel file
 
-### Excel XLSX (New!)
-- Formatted spreadsheets
-- Professional appearance
+**Flipkart:**
+1. Log in to Seller Dashboard
+2. Reports → Sales Report
+3. Download Excel file
+
+**Amazon:**
+1. Log in to Seller Central
+2. Reports → Payments → Monthly Transactions
+3. Download CSV
+
+### Organize Files
+```
+gst-json-generator-pro/
+├── meesho_sales.xlsx
+├── flipkart_sales.xlsx
+└── amazon_sales.csv
+```
+
+---
+
+## 3️⃣ Run Generator
+
+### In Application
+
+1. **Enter Your GSTIN**
+   ```
+   07AARCM9332R1CQ
+   ```
+   (15-digit GST number)
+
+2. **Enter Period**
+   ```
+   042024
+   ```
+   (MMYYYY format: April 2024)
+
+3. **Select Mode**
+   ```
+   Auto Merge
+   ```
+   (For multiple platforms)
+
+4. **Add Files**
+   - Click "Add Files"
+   - Select your downloaded reports
+
+5. **Choose Export**
+   - ☑️ JSON (recommended)
+   - ☐ CSV
+   - ☐ Excel
+
+6. **Generate**
+   - Click "GENERATE GST JSON"
+   - Wait for completion
+   - Check reconciliation dashboard
+
+---
+
+## 4️⃣ Verify Output
+
+### Reconciliation Dashboard Shows:
+- ✅ Total Taxable: ₹50,000.00
+- ✅ Total Tax: ₹1,500.00
+- ✅ Returns: ₹500.00
+- ✅ State-wise breakdown
+
+### Files Generated (in `output/` folder):
+```
+GSTR1_042024_20260419_153045.json
+GSTR1_042024_20260419_153045.csv
+GSTR1_042024_20260419_153045.xlsx
+```
+
+---
+
+## 5️⃣ Upload to GST Portal
+
+1. Go to https://gstr.gov.in
+2. Log in with DSC
+3. GSTR-1 → Prepare Offline
+4. Upload generated JSON file
+5. Validate and submit
+
+---
+
+## ✅ Checklist Before Upload
+
+- [ ] GSTIN matches seller registration
+- [ ] Period is correct (MMYYYY)
+- [ ] Total taxable matches your records
+- [ ] Tax calculations verified
+- [ ] No zero amounts
+- [ ] Returns properly deducted
+- [ ] Invoice numbers are correct
+
+---
+
+## 🆘 Troubleshooting
+
+### "Python not found"
+```bash
+# Install Python 3 from https://www.python.org
+python3 --version  # Check version (should be 3.7+)
+```
+
+### "File not recognized"
+- Check file format (Excel or CSV)
+- Verify columns: Invoice, State, Taxable Value
+- Try saving with UTF-8 encoding
+
+### "GSTIN invalid"
+- Must be 15 digits
+- Format: AABBCCCCCCCCCCN
+- Example: 07AARCM9332R1CQ (Delhi seller)
+
+### App won't start
+```bash
+# Reinstall everything
+rm -rf venv
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+python3 main.py
+```
+
+---
+
+## 📊 Sample Data
+
+Test files are in `test_data/`:
+
+```bash
+# Quick test
+cd gst-json-generator-pro
+source venv/bin/activate
+python3 main.py
+
+# In app:
+# GSTIN: 07AARCM9332R1CQ
+# Period: 042024
+# Mode: Auto Merge
+# Add: test_data/meesho_sales.csv, test_data/flipkart_sales.csv
+# Generate
+```
+
+Expected output:
+- Total Taxable: ₹31,000.00
+- Total IGST: ₹870.00
+
+---
+
+## 💡 Tips
+
+1. **Auto Merge** works best for multiple platforms
+2. **Use JSON** format for GST Portal upload
+3. **Always verify** totals before uploading
+4. **Keep backups** of generated JSON files
+5. **Check logs** if something goes wrong (in `logs/` folder)
+
+---
+
+## 📞 Need Help?
+
+- Check [README.md](README.md) for detailed documentation
+- See [DEBUG_REPORT.md](DEBUG_REPORT.md) for technical details
+- Visit [DEPLOYMENT.md](DEPLOYMENT.md) for server setup
+
+---
+
+**Ready? Let's generate your GST JSON! 🚀**
+
+Last Updated: April 19, 2026
 - Easy to share
 
 ## 🎯 Common Tasks

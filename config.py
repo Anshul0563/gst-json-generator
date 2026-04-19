@@ -4,8 +4,17 @@ Centralized configuration with validation and hot-reload support
 """
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict, Optional
+
+# Load .env file if it exists
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    # dotenv not required, but helpful if installed
+    pass
 
 
 class Config:
