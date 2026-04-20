@@ -512,9 +512,13 @@ class MainWindow(QMainWindow):
             "State-wise Distribution:",
         ]
         
-        for row in output.get('summary', {}).get('total_taxable', 0):
-            if isinstance(row, dict):
-                lines.append(f"  POS {row.get('pos')}: ₹{row.get('taxable_value', 0):.2f}")
+        # FIXED: Get b2cs entries to show state-wise breakdown
+        b2cs = output.get('b2cs', [])
+        if b2cs:
+            for entry in b2cs:
+                pos = entry.get('pos', 'N/A')
+                txval = entry.get('txval', 0)
+                lines.append(f"  POS {pos}: ₹{txval:.2f}")
         
         # Supplier info if available
         clttx = output.get('supeco', {}).get('clttx', [])
