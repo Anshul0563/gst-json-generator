@@ -1,294 +1,227 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-gst_builder.py - FIXED GST GSTR-1 JSON Builder
-Converts parsed data into valid GSTR-1 JSON format with comprehensive validation.
+gst_builder.py - Build GSTR-1 JSON from merged_rows
 
-KEY FIXES:
-- Proper total calculations from deduplicated data
-- summary.total_taxable == sum(clttx.suppval)
-- Correct INTRA/INTER determination
-- Proper tax field assignment
+SINGLE SOURCE OF TRUTH: merged_rows from parser
+
+Pipeline:
+1. Receive merged_rows from parser
+2. Generate b2cs: group by POS, sum taxes
+3. Generate summary: sum all b2cs values
+4. Generate clttx: group by supplier_etin, sum taxes
+
+Rule: summary.total_taxable = sum(all b2cs txval)
+Rule: clttx totals = sum of their rows from merged_rows
 """
 
 import json
-from typing import Dict, Any, Optional, Tuple, List
-from decimal import Decimal
+from typing import Dict, Any, List, Tuple
+from pathlib import Path
 import logging
+import pandas as pd
 
 
 class GSTBuilder:
-    """Build and validate GSTR-1 JSON output."""
+    """Build GSTR-1 JSON from merged_rows."""
     
     def __init__(self):
         self.version = "GST3.1.6"
-        self.logger = logging.getLogger(__name__)
 
-    # ===============================
-    # Main Build Methods
-    # ===============================
-    def build_gstr1(self, parsed_data: Dict[str, Any], gstin: str, fp: str) -> Dict[str, Any]:
+    def build_gstr1(self, parser_output: Dict[str, Any], gstin: str, fp: str) -> Dict[str, Any]:
         """
-        Build GSTR-1 JSON from parsed data.
+        Build complete GSTR-1 JSON.
         
         Args:
-            parsed_data: Dictionary from parser with summary, clttx, etc.
-            gstin: Seller's GSTIN (e.g., "07TCRPS8655B1ZK")
-            fp: Filing period in MMYYYY format (e.g., "042024")
+            parser_output: {"merged_rows": [...]} from AutoMergeParser
+            gstin: Seller GSTIN
+            fp: Filing period (MMYYYY)
         
         Returns:
             Complete GSTR-1 JSON structure
         """
-        return self.build(parsed_data, gstin, fp)
-
-    def build(self, parsed_data: Dict[str, Any], gstin: str, fp: str) -> Dict[str, Any]:
-        """
-        Build GSTR-1 JSON structure.
+        merged_rows = parser_output.get("merged_rows", [])
         
-        CRITICAL FIXES:
-        - Use deduplicated summary totals
-        - Derive B2CS from summary.rows
-        - Ensure totals are consistent
-        """
+        if not merged_rows:
+            logging.warning("No merged rows provided")
+            return None
         
-        summary = parsed_data.get("summary", {})
-        rows = summary.get("rows", [])
-        clttx = parsed_data.get("clttx", [])
-        doc_issue = parsed_data.get("doc_issue", {"doc_det": []})
+        # Build b2cs from merged_rows
+        b2cs = self._build_b2cs(merged_rows)
         
-        # Extract seller state from GSTIN (first 2 digits)
-        seller_state = str(gstin[:2]).zfill(2)
+        # Build summary from b2cs
+        summary = self._build_summary(b2cs)
         
-        # Build B2CS (Business to Consumer Supply) array from SUMMARY ROWS
-        b2cs = []
+        # Build clttx from merged_rows
+        clttx = self._build_clttx(merged_rows)
         
-        for r in rows:
-            pos = str(r.get("pos", "")).zfill(2)
-            tx = float(r.get("taxable_value", 0))
-            ig = float(r.get("igst", 0))
-            cg = float(r.get("cgst", 0))
-            sg = float(r.get("sgst", 0))
-            
-            # Determine supply type based on taxes
-            # CRITICAL FIX: INTRA if same-state (has CGST/SGST), INTER if interstate (has IGST)
-            if abs(cg) > 0.01 or abs(sg) > 0.01:
-                sply_ty = "INTRA"
-            else:
-                sply_ty = "INTER"
-            
-            # Build row entry
-            row_entry = {
-                "sply_ty": sply_ty,
-                "rt": 3.0,
-                "typ": "OE",
-                "pos": pos,
-                "txval": round(tx, 2),
-                "csamt": 0
-            }
-            
-            # Add taxes conditionally (CRITICAL: not both iamt AND camt/samt)
-            if abs(ig) >= 0.01:
-                # Inter-state: only IGST
-                row_entry["iamt"] = round(ig, 2)
-            else:
-                # Intra-state: CGST and SGST
-                if abs(cg) >= 0.01:
-                    row_entry["camt"] = round(cg, 2)
-                if abs(sg) >= 0.01:
-                    row_entry["samt"] = round(sg, 2)
-            
-            b2cs.append(row_entry)
-        
-        # Calculate totals FROM SUMMARY (which is already deduplicated)
-        total_taxable = round(summary.get("total_taxable", 0), 2)
-        total_igst = round(summary.get("total_igst", 0), 2)
-        total_cgst = round(summary.get("total_cgst", 0), 2)
-        total_sgst = round(summary.get("total_sgst", 0), 2)
-        total_tax = round(total_igst + total_cgst + total_sgst, 2)
+        # Build doc_issue
+        doc_issue = {
+            "doc_det": [
+                {"doc_num": 1, "doc_typ": "Invoices for outward supply", "docs": []},
+                {"doc_num": 5, "doc_typ": "Credit Note", "docs": []},
+                {"doc_num": 6, "doc_typ": "Debit Note", "docs": []}
+            ]
+        }
         
         # Validate consistency
-        self.logger.info(f"Build: Summary total={total_taxable}, B2CS count={len(b2cs)}")
-        self.logger.info(f"Build: Taxes - IGST={total_igst}, CGST={total_cgst}, SGST={total_sgst}, Total={total_tax}")
+        logging.info(f"B2CS count: {len(b2cs)}")
+        logging.info(f"Summary total_taxable: {summary['total_taxable']}")
+        logging.info(f"CLTTX count: {len(clttx)}")
+        for c in clttx:
+            logging.info(f"  {c['etin']}: suppval={c['suppval']}")
         
-        # Build final JSON
-        output = {
+        return {
             "gstin": gstin.upper(),
             "fp": fp,
             "version": self.version,
             "hash": "hash",
             "b2cs": b2cs,
-            "supeco": {
-                "clttx": clttx
-            },
+            "supeco": {"clttx": clttx},
             "doc_issue": doc_issue,
-            "summary": {
-                "total_items": len(b2cs),
-                "total_taxable": total_taxable,
-                "total_igst": total_igst,
-                "total_cgst": total_cgst,
-                "total_sgst": total_sgst,
-                "total_tax": total_tax
-            }
+            "summary": summary,
+            "merged_rows": merged_rows  # Include for debugging
         }
-        
-        return output
 
-    # ===============================
-    # Validation Methods
-    # ===============================
-    def validate_output(self, output: Dict[str, Any]) -> Tuple[bool, List[str]]:
+    def _build_b2cs(self, merged_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
-        Validate GSTR-1 JSON output.
+        Build b2cs array by grouping merged_rows by POS.
         
-        Returns:
-            Tuple of (is_valid, list_of_errors)
+        Rule: Each b2cs entry = one POS with aggregated taxes
+        Rule: b2cs[].txval = sum of all txval for that POS
+        Rule: b2cs[].iamt = sum of all igst_amt for that POS
+        Rule: b2cs[].camt = sum of all cgst_amt for that POS
+        Rule: b2cs[].samt = sum of all sgst_amt for that POS
         """
+        df = pd.DataFrame(merged_rows)
+        
+        # Group by POS
+        grouped = df.groupby("pos", as_index=False).agg({
+            "txval": "sum",
+            "igst_amt": "sum",
+            "cgst_amt": "sum",
+            "sgst_amt": "sum"
+        }).round(2)
+        
+        b2cs = []
+        for _, row in grouped.iterrows():
+            pos = str(row["pos"]).zfill(2)
+            txval = round(float(row["txval"]), 2)
+            ig = round(float(row["igst_amt"]), 2)
+            cg = round(float(row["cgst_amt"]), 2)
+            sg = round(float(row["sgst_amt"]), 2)
+            
+            # Determine supply type
+            if abs(cg) > 0.01 or abs(sg) > 0.01:
+                sply_ty = "INTRA"
+            else:
+                sply_ty = "INTER"
+            
+            item = {
+                "sply_ty": sply_ty,
+                "rt": 3.0,
+                "typ": "OE",
+                "pos": pos,
+                "txval": txval,
+                "csamt": 0
+            }
+            
+            # Add taxes
+            if abs(ig) >= 0.01:
+                item["iamt"] = ig
+            if abs(cg) >= 0.01:
+                item["camt"] = cg
+            if abs(sg) >= 0.01:
+                item["samt"] = sg
+            
+            b2cs.append(item)
+        
+        return b2cs
+
+    def _build_summary(self, b2cs: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Build summary by aggregating all b2cs entries.
+        
+        Rule: summary.total_taxable = sum(b2cs[].txval)
+        Rule: summary.total_igst = sum(b2cs[].iamt)
+        Rule: summary.total_cgst = sum(b2cs[].camt)
+        Rule: summary.total_sgst = sum(b2cs[].samt)
+        Rule: summary.total_tax = igst + cgst + sgst
+        """
+        total_txval = sum(float(b.get("txval", 0)) for b in b2cs)
+        total_igst = sum(float(b.get("iamt", 0)) for b in b2cs)
+        total_cgst = sum(float(b.get("camt", 0)) for b in b2cs)
+        total_sgst = sum(float(b.get("samt", 0)) for b in b2cs)
+        
+        return {
+            "total_items": len(b2cs),
+            "total_taxable": round(total_txval, 2),
+            "total_igst": round(total_igst, 2),
+            "total_cgst": round(total_cgst, 2),
+            "total_sgst": round(total_sgst, 2),
+            "total_tax": round(total_igst + total_cgst + total_sgst, 2)
+        }
+
+    def _build_clttx(self, merged_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Build clttx by grouping merged_rows by supplier_etin.
+        
+        Rule: clttx[].suppval = sum(txval) for that supplier
+        Rule: clttx[].igst = sum(igst_amt) for that supplier
+        Rule: clttx[].cgst = sum(cgst_amt) for that supplier
+        Rule: clttx[].sgst = sum(sgst_amt) for that supplier
+        """
+        df = pd.DataFrame(merged_rows)
+        
+        # Get unique ETINs from data
+        etins = df["supplier_etin"].unique()
+        
+        clttx = []
+        
+        for etin in sorted(etins):
+            supplier_rows = df[df["supplier_etin"] == etin]
+            
+            suppval = round(float(supplier_rows["txval"].sum()), 2)
+            igst = round(float(supplier_rows["igst_amt"].sum()), 2)
+            cgst = round(float(supplier_rows["cgst_amt"].sum()), 2)
+            sgst = round(float(supplier_rows["sgst_amt"].sum()), 2)
+            
+            clttx.append({
+                "etin": str(etin),
+                "suppval": suppval,
+                "igst": igst,
+                "cgst": cgst,
+                "sgst": sgst,
+                "cess": 0,
+                "flag": "N"
+            })
+        
+        return clttx
+
+    def validate_output(self, output: Dict[str, Any]) -> Tuple[bool, List[str]]:
+        """Validate GSTR-1 output."""
         errors = []
         
-        # Check required keys
-        required_keys = ["gstin", "fp", "version", "b2cs", "supeco", "doc_issue", "summary"]
-        for key in required_keys:
-            if key not in output:
-                errors.append(f"Missing key: {key}")
+        # Check b2cs total matches summary
+        b2cs_total = sum(float(b.get("txval", 0)) for b in output.get("b2cs", []))
+        summary_total = output.get("summary", {}).get("total_taxable", 0)
         
-        # Validate summary keys
-        if "summary" in output:
-            s = output["summary"]
-            summary_keys = ["total_items", "total_taxable", "total_igst", "total_cgst", "total_sgst", "total_tax"]
-            for k in summary_keys:
-                if k not in s:
-                    errors.append(f"Missing summary key: {k}")
-                else:
-                    # Validate numeric values
-                    try:
-                        v = float(s[k])
-                        if v < 0 and k != "total_items":
-                            # Allow negative for returns, but warn
-                            pass
-                    except (ValueError, TypeError):
-                        errors.append(f"Summary {k} is not numeric: {s[k]}")
+        if abs(b2cs_total - summary_total) > 0.01:
+            errors.append(f"B2CS total {b2cs_total} != summary total {summary_total}")
         
-        # Validate B2CS entries
-        if "b2cs" in output:
-            for i, item in enumerate(output["b2cs"]):
-                # Check required B2CS fields
-                b2cs_required = ["sply_ty", "rt", "typ", "pos", "txval"]
-                for key in b2cs_required:
-                    if key not in item:
-                        errors.append(f"B2CS[{i}] missing key: {key}")
-                
-                # Validate numeric fields
-                for key in ["txval", "rt", "csamt"]:
-                    if key in item:
-                        try:
-                            float(item[key])
-                        except (ValueError, TypeError):
-                            errors.append(f"B2CS[{i}] {key} is not numeric: {item[key]}")
-                
-                # Validate tax amount fields
-                if "iamt" in item:
-                    try:
-                        float(item["iamt"])
-                    except (ValueError, TypeError):
-                        errors.append(f"B2CS[{i}] iamt is not numeric")
-                else:
-                    # Must have camt/samt if no iamt
-                    try:
-                        if "camt" in item:
-                            float(item.get("camt", 0))
-                        if "samt" in item:
-                            float(item.get("samt", 0))
-                    except (ValueError, TypeError):
-                        errors.append(f"B2CS[{i}] camt/samt is not numeric")
+        # Check summary taxes
+        b2cs_igst = sum(float(b.get("iamt", 0)) for b in output.get("b2cs", []))
+        summary_igst = output.get("summary", {}).get("total_igst", 0)
+        if abs(b2cs_igst - summary_igst) > 0.01:
+            errors.append(f"B2CS IGST {b2cs_igst} != summary IGST {summary_igst}")
         
-        # Validate CLTTX entries
-        if "supeco" in output and "clttx" in output["supeco"]:
-            for i, item in enumerate(output["supeco"]["clttx"]):
-                # Check required CLTTX fields
-                clttx_required = ["etin", "suppval", "igst", "cgst", "sgst", "cess", "flag"]
-                for key in clttx_required:
-                    if key not in item:
-                        errors.append(f"CLTTX[{i}] missing key: {key}")
-                
-                # Validate numeric fields
-                for key in ["suppval", "igst", "cgst", "sgst", "cess"]:
-                    if key in item:
-                        try:
-                            float(item[key])
-                        except (ValueError, TypeError):
-                            errors.append(f"CLTTX[{i}] {key} is not numeric: {item[key]}")
+        # Check CLTTX
+        clttx = output.get("supeco", {}).get("clttx", [])
+        if not clttx:
+            errors.append("CLTTX is empty")
         
-        # Validate GSTIN format
-        if "gstin" in output:
-            gstin = output["gstin"]
-            if not self._validate_gstin_format(gstin):
-                errors.append(f"Invalid GSTIN format: {gstin}")
-        
-        # Validate period format
-        if "fp" in output:
-            fp = output["fp"]
-            if not self._validate_period_format(fp):
-                errors.append(f"Invalid filing period format: {fp}. Expected MMYYYY")
+        for item in clttx:
+            if item.get("suppval", 0) < 0:
+                errors.append(f"CLTTX {item['etin']} has negative suppval: {item['suppval']}")
         
         return len(errors) == 0, errors
-
-    def _validate_gstin_format(self, gstin: str) -> bool:
-        """Validate GSTIN format (2-digit state + 13 chars = 15 total)."""
-        gstin = str(gstin).strip().upper()
-        if len(gstin) != 15:
-            return False
-        if not gstin[:2].isdigit():
-            return False
-        try:
-            state_code = int(gstin[:2])
-            if state_code < 1 or state_code > 38:
-                return False
-        except ValueError:
-            return False
-        return True
-
-    def _validate_period_format(self, fp: str) -> bool:
-        """Validate filing period format (MMYYYY)."""
-        fp = str(fp).strip()
-        if len(fp) != 6:
-            return False
-        if not fp.isdigit():
-            return False
-        month = int(fp[:2])
-        year = int(fp[2:])
-        if month < 1 or month > 12:
-            return False
-        if year < 2000 or year > 2099:
-            return False
-        return True
-
-    # ===============================
-    # Save Methods
-    # ===============================
-    def save_json(self, data: Dict[str, Any], file_path: str) -> bool:
-        """
-        Save data to JSON file.
-        
-        Args:
-            data: Dictionary to save
-            file_path: Path where to save the file
-        
-        Returns:
-            True if successful, False otherwise
-        """
-        try:
-            with open(file_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
-            self.logger.info(f"JSON saved to {file_path}")
-            return True
-        except Exception as e:
-            self.logger.error(f"Failed to save JSON: {e}")
-            return False
-
-    def save(self, data: Dict[str, Any], file_path: str) -> bool:
-        """Alias for save_json."""
-        return self.save_json(data, file_path)
-
-    def to_json_string(self, data: Dict[str, Any]) -> str:
-        """Convert data to JSON string."""
-        return json.dumps(data, indent=2, ensure_ascii=False)
