@@ -27,6 +27,15 @@ def safe(v) -> float:
         return 0.0
 
 
+def to_native(val):
+    """Convert numpy/pandas types to Python native types."""
+    if pd.isna(val):
+        return None
+    if hasattr(val, 'item'):  # numpy scalar
+        return val.item()
+    return val
+
+
 # Complete State mapping with all 38 Indian states
 STATE_MAP = {
     # State codes
@@ -147,14 +156,17 @@ class BaseParser:
         sales = df[df["txn_type"] == "sale"]
         returns = df[df["txn_type"] == "return"]
         
+        # Convert grouped records to native Python types
+        grp_records = [{k: to_native(v) for k, v in record.items()} for record in grp.to_dict("records")]
+        
         return {
             "etin": self.ETIN,
             "summary": {
-                "rows": grp.to_dict("records"),
-                "total_taxable": round(grp["taxable_value"].sum(), 2),
-                "total_igst": round(grp["igst"].sum(), 2),
-                "total_cgst": round(grp["cgst"].sum(), 2),
-                "total_sgst": round(grp["sgst"].sum(), 2),
+                "rows": grp_records,
+                "total_taxable": float(to_native(grp["taxable_value"].sum())),
+                "total_igst": float(to_native(grp["igst"].sum())),
+                "total_cgst": float(to_native(grp["cgst"].sum())),
+                "total_sgst": float(to_native(grp["sgst"].sum())),
             },
             "invoice_docs": [
                 {
@@ -435,27 +447,30 @@ class AutoMergeParser:
             ["taxable_value", "igst", "cgst", "sgst"]
         ].sum().round(2)
         
+        # Convert grouped records to native Python types
+        grp_records = [{k: to_native(v) for k, v in record.items()} for record in grp.to_dict("records")]
+        
         # Build clttx (supplier consolidated tax)
         clttx = []
         for etin, data in supplier_data.items():
             summary = data.get("summary", {})
             clttx.append({
                 "etin": etin,
-                "suppval": round(summary.get("total_taxable", 0), 2),
-                "igst": round(summary.get("total_igst", 0), 2),
-                "cgst": round(summary.get("total_cgst", 0), 2),
-                "sgst": round(summary.get("total_sgst", 0), 2),
+                "suppval": float(to_native(summary.get("total_taxable", 0))),
+                "igst": float(to_native(summary.get("total_igst", 0))),
+                "cgst": float(to_native(summary.get("total_cgst", 0))),
+                "sgst": float(to_native(summary.get("total_sgst", 0))),
                 "cess": 0,
                 "flag": "N"
             })
         
         return {
             "summary": {
-                "rows": grp.to_dict("records"),
-                "total_taxable": round(df["taxable_value"].sum(), 2),
-                "total_igst": round(df["igst"].sum(), 2),
-                "total_cgst": round(df["cgst"].sum(), 2),
-                "total_sgst": round(df["sgst"].sum(), 2),
+                "rows": grp_records,
+                "total_taxable": float(to_native(df["taxable_value"].sum())),
+                "total_igst": float(to_native(df["igst"].sum())),
+                "total_cgst": float(to_native(df["cgst"].sum())),
+                "total_sgst": float(to_native(df["sgst"].sum())),
             },
             "clttx": clttx,
             "doc_issue": {
