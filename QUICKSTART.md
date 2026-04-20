@@ -1,53 +1,172 @@
-# Quick Start Guide - GST JSON Generator Pro
+# GST JSON Generator Pro v2.0 - QUICK START REFERENCE
 
-**Get started in 5 minutes**
+## ⚡ 5-Minute Quick Start
 
----
+### Prerequisites
+- Python 3.10+ installed
+- ~1GB disk space
+- Your Meesho/Amazon data files
 
-## 1️⃣ Install (Pick One)
+### Installation (3 steps)
 
-### Option A: Automatic (Recommended)
-```bash
-git clone https://github.com/Anshul0563/gst-json-generator-pro.git
-cd gst-json-generator-pro
+1. **Install dependencies:**
+   ```bash
+   pip install -r requirements.txt
+   ```
 
-# Linux/macOS
-chmod +x run.sh
-./run.sh
+2. **Create output directories:**
+   ```bash
+   mkdir -p logs output
+   ```
 
-# Windows
-run.bat
-```
-
-### Option B: Manual
-```bash
-git clone https://github.com/Anshul0563/gst-json-generator-pro.git
-cd gst-json-generator-pro
-python3 -m venv venv
-source venv/bin/activate  # or venv\Scripts\activate on Windows
-pip install -r requirements.txt
-python3 main.py
-```
+3. **Run the application:**
+   ```bash
+   python main.py
+   ```
 
 ---
 
-## 2️⃣ Prepare Your Files
+## 🎯 Usage Workflow
 
-### Get Reports From Platforms
+```
+1. SELECT PARSER
+   ↓ Choose: Auto Merge, Meesho, or Amazon
+   ↓
+2. ENTER GSTIN
+   ↓ E.g., 07TCRPS8655B1ZK (first 2 digits = state code)
+   ↓
+3. ENTER PERIOD
+   ↓ E.g., 042024 (April 2024, MMYYYY format)
+   ↓
+4. ADD FILES
+   ↓ Select CSV or Excel files with your data
+   ↓
+5. GENERATE & EXPORT
+   ↓ Click "GENERATE GST JSON"
+   ↓ Click "Export to File"
+   ↓
+OUTPUT: Valid GSTR-1 JSON in ./output/
+```
 
-**Meesho:**
-1. Log in to Seller Dashboard
-2. Reports → Tax Invoice Details (or TCS Sales Report)
-3. Download Excel file
+---
 
-**Flipkart:**
-1. Log in to Seller Dashboard
-2. Reports → Sales Report
-3. Download Excel file
+## 📋 Supported File Formats
 
-**Amazon:**
-1. Log in to Seller Central
-2. Reports → Payments → Monthly Transactions
+### Meesho Files
+- `tcs_sales.xlsx`
+- `tcs_sales_return.xlsx`
+- `tax_invoice_details.xlsx`
+- Any file with: `sub_order_num`, `end_customer_state_new`, `total_taxable_sale_value`
+
+### Amazon Files
+- `*_settlement_*.csv`
+- `*_mtr*.csv`
+- Any CSV with: `invoice_number`, `ship_to_state`, `tax_exclusive_gross`, `igst_tax`, `cgst_tax`, `sgst_tax`
+
+---
+
+## 💡 Input Validation Rules
+
+| Field | Format | Example | Valid |
+|-------|--------|---------|-------|
+| GSTIN | 15 chars, 2-digit state code | 07TCRPS8655B1ZK | ✓ |
+| Period | MMYYYY | 042024 | ✓ |
+| Files | .xlsx, .xls, .csv | data.csv | ✓ |
+| File Size | Max 500MB | 50MB | ✓ |
+
+---
+
+## 💰 Tax Calculation
+
+### Same State (Intra-State)
+```
+If POS = Seller's State:
+  CGST = 1.5% 
+  SGST = 1.5%
+  IGST = 0%
+```
+
+### Different State (Inter-State)
+```
+If POS ≠ Seller's State:
+  IGST = 3%
+  CGST = 0%
+  SGST = 0%
+```
+
+---
+
+## 🐛 Common Issues & Fixes
+
+| Issue | Cause | Fix |
+|-------|-------|-----|
+| "File not found" | Wrong file path | Check file exists |
+| "Invalid GSTIN" | Wrong format | Use 15-char format: 07XXXXX |
+| "Invalid period" | Wrong format | Use MMYYYY: 042024 |
+| App won't start | Missing dependency | Run: `pip install -r requirements.txt` |
+
+---
+
+## 📊 Sample Output
+
+```json
+{
+  "gstin": "07TCRPS8655B1ZK",
+  "fp": "042024",
+  "version": "GST3.1.6",
+  "b2cs": [
+    {
+      "sply_ty": "INTRA",
+      "rt": 3.0,
+      "typ": "OE",
+      "pos": "07",
+      "txval": 1000.00,
+      "camt": 15.00,
+      "samt": 15.00
+    }
+  ],
+  "summary": {
+    "total_items": 1,
+    "total_taxable": 1000.00,
+    "total_tax": 30.00
+  }
+}
+```
+
+---
+
+## 🔍 Log File Location
+
+```
+logs/app.log
+```
+
+---
+
+## ✅ Production Checklist
+
+- [ ] Python 3.10+ installed
+- [ ] Dependencies installed
+- [ ] config.json exists
+- [ ] logs/ directory exists
+- [ ] output/ directory exists
+- [ ] Test file processed
+- [ ] Output JSON validated
+
+---
+
+## 📞 Support Resources
+
+| Topic | File |
+|-------|------|
+| Full Documentation | README_COMPLETE.md |
+| Installation | SETUP_COMPLETE.md |
+| Source Code | parsers.py, gst_builder.py, ui.py |
+
+---
+
+**Version**: 2.0.0  
+**Status**: Production-Ready ✓
 3. Download CSV
 
 ### Organize Files
