@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-parsers.py - FIXED Production-Grade GST GSTR-1 Parsers
-Supports Meesho, Amazon, and Auto-Merge parsing with comprehensive error handling.
+parsers.py - COMPREHENSIVE FIXED Production-Grade GST GSTR-1 Parsers
+Supports Meesho, Amazon, and Auto-Merge with proper handling of sales/returns separation.
 
-KEY FIXES:
-- Parser routing is strict (not every CSV is Amazon)
-- Double-parsing prevention in AutoMerge
-- Deduplication prevents inflated totals
-- summary.total_taxable == sum(clttx.suppval)
+CRITICAL FIXES:
+✓ Returns stored as POSITIVE with txn_type="return" (never negative values)
+✓ suppval = sales_total (never negative, correctly reflects true sales)
+✓ summary.total_taxable = sales - returns (net value)
+✓ Both Meesho + Amazon always appear in clttx
+✓ No double-parsing or double-subtraction of returns
+✓ Proper deduplication prevents inflated totals
 """
 
 import pandas as pd
@@ -140,7 +142,12 @@ class BaseParser:
         return []
 
     def finalize(self, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Finalize parsed data with deduplication and aggregation."""
+        """
+        Finalize parsed data with deduplication and aggregation.
+        
+        CRITICAL: Returns are stored as POSITIVE with txn_type="return"
+        Sales totals keep actual value for suppval calculation.
+        """
         if not rows:
             return None
         
@@ -160,23 +167,35 @@ class BaseParser:
         dedup_cols = ["invoice_no", "pos", "taxable_value", "igst", "cgst", "sgst", "txn_type"]
         df = df.drop_duplicates(subset=dedup_cols).reset_index(drop=True)
         
-        # Group by POS (Place of Supply)
+        # Separate sales and returns - BOTH stored as POSITIVE values
+        sales = df[df["txn_type"] == "sale"]
+        returns = df[df["txn_type"] == "return"]
+        
+        # Group by POS for summary
         grp = df.groupby("pos", as_index=False)[
             ["taxable_value", "igst", "cgst", "sgst"]
         ].sum().round(2)
         
-        # Separate sales and returns
-        sales = df[df["txn_type"] == "sale"]
-        returns = df[df["txn_type"] == "return"]
-        
         # Convert grouped records to native Python types
         grp_records = [{k: to_native(v) for k, v in record.items()} for record in grp.to_dict("records")]
         
-        # Calculate totals
-        total_taxable = float(to_native(grp["taxable_value"].sum()))
-        total_igst = float(to_native(grp["igst"].sum()))
-        total_cgst = float(to_native(grp["cgst"].sum()))
-        total_sgst = float(to_native(grp["sgst"].sum()))
+        # Calculate totals for SUMMARY (net: sales - returns)
+        # For sales, use positive values. For returns, subtract (they're stored positive)
+        sales_taxable = float(to_native(sales["taxable_value"].sum())) if not sales.empty else 0.0
+        sales_igst = float(to_native(sales["igst"].sum())) if not sales.empty else 0.0
+        sales_cgst = float(to_native(sales["cgst"].sum())) if not sales.empty else 0.0
+        sales_sgst = float(to_native(sales["sgst"].sum())) if not sales.empty else 0.0
+        
+        returns_taxable = float(to_native(returns["taxable_value"].sum())) if not returns.empty else 0.0
+        returns_igst = float(to_native(returns["igst"].sum())) if not returns.empty else 0.0
+        returns_cgst = float(to_native(returns["cgst"].sum())) if not returns.empty else 0.0
+        returns_sgst = float(to_native(returns["sgst"].sum())) if not returns.empty else 0.0
+        
+        # NET totals for summary (sales - returns)
+        total_taxable = round(sales_taxable - returns_taxable, 2)
+        total_igst = round(sales_igst - returns_igst, 2)
+        total_cgst = round(sales_cgst - returns_cgst, 2)
+        total_sgst = round(sales_sgst - returns_sgst, 2)
         
         return {
             "etin": self.ETIN,
@@ -186,6 +205,11 @@ class BaseParser:
                 "total_igst": total_igst,
                 "total_cgst": total_cgst,
                 "total_sgst": total_sgst,
+                # Also track sales separately for suppval calculation
+                "sales_taxable": round(sales_taxable, 2),
+                "sales_igst": round(sales_igst, 2),
+                "sales_cgst": round(sales_cgst, 2),
+                "sales_sgst": round(sales_sgst, 2),
             },
             "invoice_docs": [
                 {
@@ -203,10 +227,10 @@ class BaseParser:
                 {
                     "invoice_no": str(r["invoice_no"]).strip(),
                     "pos": str(r["pos"]).zfill(2),
-                    "txval": abs(round(float(r["taxable_value"]), 2)),
-                    "igst_amt": abs(round(float(r["igst"]), 2)),
-                    "cgst_amt": abs(round(float(r["cgst"]), 2)),
-                    "sgst_amt": abs(round(float(r["sgst"]), 2)),
+                    "txval": round(float(r["taxable_value"]), 2),  # Already positive
+                    "igst_amt": round(float(r["igst"]), 2),
+                    "cgst_amt": round(float(r["cgst"]), 2),
+                    "sgst_amt": round(float(r["sgst"]), 2),
                     "txn_type": "return",
                 }
                 for _, r in returns.iterrows()
@@ -287,12 +311,8 @@ class MeeshoParser(BaseParser):
                 else:  # Inter-state
                     ig, cg, sg = round(tax_amt, 2), 0.0, 0.0
                 
-                # Negate values for returns
-                if is_return:
-                    val = -abs(val)
-                    ig = -abs(ig)
-                    cg = -abs(cg)
-                    sg = -abs(sg)
+                # CRITICAL FIX: Store returns as POSITIVE values with txn_type="return"
+                # Do NOT negate the values - mark the transaction type instead
                 
                 # Skip zero/negligible rows
                 if abs(val) < 0.01 and abs(ig) + abs(cg) + abs(sg) < 0.01:
@@ -301,10 +321,10 @@ class MeeshoParser(BaseParser):
                 out.append({
                     "invoice_no": str(row.get(inv_col, i)).strip(),
                     "pos": str(pos).zfill(2),
-                    "taxable_value": round(val, 2),
-                    "igst": round(ig, 2),
-                    "cgst": round(cg, 2),
-                    "sgst": round(sg, 2),
+                    "taxable_value": round(abs(val), 2),  # Store as POSITIVE
+                    "igst": round(abs(ig), 2),
+                    "cgst": round(abs(cg), 2),
+                    "sgst": round(abs(sg), 2),
                     "txn_type": "return" if is_return else "sale",
                 })
             
@@ -386,12 +406,8 @@ class AmazonParser(BaseParser):
                 txn_type = str(row.get(txn_col, "shipment")).strip().lower() if txn_col else "shipment"
                 is_return = txn_type in ["refund", "cancel", "cancelled", "return", "reversal"] or val < 0
                 
-                # Negate for returns
-                if is_return:
-                    val = -abs(val)
-                    ig = -abs(ig)
-                    cg = -abs(cg)
-                    sg = -abs(sg)
+                # CRITICAL FIX: Store returns as POSITIVE values with txn_type="return"
+                # Do NOT negate values - mark the transaction type instead
                 
                 # Skip zero/negligible rows
                 if abs(val) < 0.01 and abs(ig) + abs(cg) + abs(sg) < 0.01:
@@ -400,10 +416,10 @@ class AmazonParser(BaseParser):
                 out.append({
                     "invoice_no": str(row.get(inv_col, i)).strip() if inv_col else str(i),
                     "pos": str(pos).zfill(2),
-                    "taxable_value": round(val, 2),
-                    "igst": round(ig, 2),
-                    "cgst": round(cg, 2),
-                    "sgst": round(sg, 2),
+                    "taxable_value": round(abs(val), 2),  # Store as POSITIVE
+                    "igst": round(abs(ig), 2),
+                    "cgst": round(abs(cg), 2),
+                    "sgst": round(abs(sg), 2),
                     "txn_type": "return" if is_return else "sale",
                 })
             
@@ -483,7 +499,11 @@ class AutoMergeParser:
         """
         Merge results from multiple parsers with comprehensive deduplication.
         
-        CRITICAL: Ensures summary.total == sum(clttx.suppval)
+        CRITICAL FIXES:
+        - Both Meesho + Amazon ALWAYS appear in clttx (even if empty)
+        - suppval calculated from SALES totals (never negative unless net sales are negative)
+        - summary totals are NET (sales - returns)
+        - No double-subtraction of returns
         """
         
         # Create normalized DataFrame for grouping
@@ -516,46 +536,92 @@ class AutoMergeParser:
         # Convert grouped records to native Python types
         grp_records = [{k: to_native(v) for k, v in record.items()} for record in grp.to_dict("records")]
         
-        # Calculate totals from deduplicated data (CRITICAL FIX)
-        total_taxable = round(float(to_native(df["taxable_value"].sum())), 2)
-        total_igst = round(float(to_native(df["igst"].sum())), 2)
-        total_cgst = round(float(to_native(df["cgst"].sum())), 2)
-        total_sgst = round(float(to_native(df["sgst"].sum())), 2)
+        # Calculate totals from deduplicated data
+        # For returns (which are marked txn_type="return"), they're stored positive
+        # So we need to subtract them for NET totals
+        sales_df = df[df["txn_type"] == "sale"]
+        returns_df = df[df["txn_type"] == "return"]
         
-        # Build clttx with totals that match summary
+        sales_taxable = round(float(to_native(sales_df["taxable_value"].sum())), 2) if not sales_df.empty else 0.0
+        sales_igst = round(float(to_native(sales_df["igst"].sum())), 2) if not sales_df.empty else 0.0
+        sales_cgst = round(float(to_native(sales_df["cgst"].sum())), 2) if not sales_df.empty else 0.0
+        sales_sgst = round(float(to_native(sales_df["sgst"].sum())), 2) if not sales_df.empty else 0.0
+        
+        returns_taxable = round(float(to_native(returns_df["taxable_value"].sum())), 2) if not returns_df.empty else 0.0
+        returns_igst = round(float(to_native(returns_df["igst"].sum())), 2) if not returns_df.empty else 0.0
+        returns_cgst = round(float(to_native(returns_df["cgst"].sum())), 2) if not returns_df.empty else 0.0
+        returns_sgst = round(float(to_native(returns_df["sgst"].sum())), 2) if not returns_df.empty else 0.0
+        
+        # Summary totals are NET (sales - returns)
+        total_taxable = round(sales_taxable - returns_taxable, 2)
+        total_igst = round(sales_igst - returns_igst, 2)
+        total_cgst = round(sales_cgst - returns_cgst, 2)
+        total_sgst = round(sales_sgst - returns_sgst, 2)
+        
+        # Build clttx with BOTH suppliers
+        # CRITICAL FIX: Both Meesho and Amazon must appear
         clttx = []
-        clttx_total_taxable = 0.0
-        clttx_total_igst = 0.0
-        clttx_total_cgst = 0.0
-        clttx_total_sgst = 0.0
         
-        for etin, data in supplier_data.items():
+        # Meesho
+        meesho_etin = "07AARCM9332R1CQ"
+        if meesho_etin in supplier_data:
+            data = supplier_data[meesho_etin]
             summary = data.get("summary", {})
-            
-            # Use supplier's own deduped totals
-            supp_taxable = round(float(to_native(summary.get("total_taxable", 0))), 2)
-            supp_igst = round(float(to_native(summary.get("total_igst", 0))), 2)
-            supp_cgst = round(float(to_native(summary.get("total_cgst", 0))), 2)
-            supp_sgst = round(float(to_native(summary.get("total_sgst", 0))), 2)
-            
-            clttx.append({
-                "etin": etin,
-                "suppval": supp_taxable,
-                "igst": supp_igst,
-                "cgst": supp_cgst,
-                "sgst": supp_sgst,
-                "cess": 0,
-                "flag": "N"
-            })
-            
-            clttx_total_taxable += supp_taxable
-            clttx_total_igst += supp_igst
-            clttx_total_cgst += supp_cgst
-            clttx_total_sgst += supp_sgst
+            # Use SALES totals for suppval (not net with returns)
+            supp_taxable = round(summary.get("sales_taxable", 0), 2)
+            supp_igst = round(summary.get("sales_igst", 0), 2)
+            supp_cgst = round(summary.get("sales_cgst", 0), 2)
+            supp_sgst = round(summary.get("sales_sgst", 0), 2)
+        else:
+            # Meesho not found, add empty entry
+            supp_taxable = 0.0
+            supp_igst = 0.0
+            supp_cgst = 0.0
+            supp_sgst = 0.0
         
-        # Verify: summary totals should match clttx totals
-        logging.info(f"AutoMerge Summary Totals: Tax={total_taxable}, IGST={total_igst}, CGST={total_cgst}, SGST={total_sgst}")
-        logging.info(f"AutoMerge CLTTX Totals: Tax={clttx_total_taxable}, IGST={clttx_total_igst}, CGST={clttx_total_cgst}, SGST={clttx_total_sgst}")
+        clttx.append({
+            "etin": meesho_etin,
+            "suppval": supp_taxable,
+            "igst": supp_igst,
+            "cgst": supp_cgst,
+            "sgst": supp_sgst,
+            "cess": 0,
+            "flag": "N"
+        })
+        
+        # Amazon
+        amazon_etin = "07AAICA3918J1CV"
+        if amazon_etin in supplier_data:
+            data = supplier_data[amazon_etin]
+            summary = data.get("summary", {})
+            # Use SALES totals for suppval (not net with returns)
+            supp_taxable = round(summary.get("sales_taxable", 0), 2)
+            supp_igst = round(summary.get("sales_igst", 0), 2)
+            supp_cgst = round(summary.get("sales_cgst", 0), 2)
+            supp_sgst = round(summary.get("sales_sgst", 0), 2)
+        else:
+            # Amazon not found, add empty entry
+            supp_taxable = 0.0
+            supp_igst = 0.0
+            supp_cgst = 0.0
+            supp_sgst = 0.0
+        
+        clttx.append({
+            "etin": amazon_etin,
+            "suppval": supp_taxable,
+            "igst": supp_igst,
+            "cgst": supp_cgst,
+            "sgst": supp_sgst,
+            "cess": 0,
+            "flag": "N"
+        })
+        
+        # Verify totals
+        clttx_total_taxable = sum(c["suppval"] for c in clttx)
+        logging.info(f"AutoMerge Summary: NET Tax={total_taxable} (Sales={sales_taxable} - Returns={returns_taxable})")
+        logging.info(f"AutoMerge CLTTX Total: {clttx_total_taxable} from {len(clttx)} suppliers")
+        for c in clttx:
+            logging.info(f"  {c['etin']}: suppval={c['suppval']}")
         
         return {
             "summary": {
