@@ -260,4 +260,3 @@ class AutoMergeParser(BaseParser):
 # Exact exports required
 __all__ = ['MeeshoParser', 'AmazonParser', 'AutoMergeParser']
 
-
