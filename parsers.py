@@ -192,7 +192,9 @@ class AmazonParser(BaseParser):
         if 'flipkart' in name:
             return []
         
-        if not any(x in name for x in ['amazon', 'mtr']) or not Path(filepath).suffix.lower() == '.csv':
+        if 'flipkart' in name:
+            return []
+        if Path(filepath).suffix.lower() not in ['.csv', '.xlsx', '.xls']:
             return []
         
         df = self._read_df(filepath)
