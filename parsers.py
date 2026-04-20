@@ -22,15 +22,17 @@ Output structure from all parsers:
     ]
 }
 
-gst_builder.py generates from merged_rows:
-- b2cs: group by POS
-- summary: sum all txval, igst_amt, cgst_amt, sgst_amt
-- clttx: group by supplier_etin
+PORTAL COMPLIANCE:
+- Only Meesho + Amazon data
+- No Flipkart or unknown suppliers
+- Duplicate removal by: invoice_no + pos + txval + supplier_etin
+- Zero-value rows removed automatically
+- All values rounded to 2 decimals
 """
 
 import pandas as pd
 from pathlib import Path
-from typing import Optional, Dict, List, Any, Set
+from typing import Optional, Dict, List, Any
 import logging
 
 # =====================================================
@@ -73,22 +75,37 @@ STATE_MAP = {
 
 
 def safe(v) -> float:
-    """Safely convert to float."""
+    """Safely convert any value to float. Returns 0.0 on failure."""
     try:
         if pd.isna(v):
             return 0.0
         s = str(v).replace(",", "").replace("₹", "").strip()
-        return float(s) if s and s.lower() not in ["na", "n/a", "null", "none"] else 0.0
+        if not s or s.lower() in ["na", "n/a", "null", "none", ""]:
+            return 0.0
+        return round(float(s), 2)
     except (ValueError, TypeError, AttributeError):
         return 0.0
 
 
 def gst_state(x: Optional[str]) -> Optional[str]:
-    """Convert state name/code to GST state code (01-38)."""
+    """Convert state name/code to GST state code (01-38). Returns None if not found."""
     if x is None:
         return None
     s = str(x).strip().lower()
-    return STATE_MAP.get(s, STATE_MAP.get(s.zfill(2)) if s.isdigit() else None)
+    if not s:
+        return None
+    
+    # Direct lookup
+    if s in STATE_MAP:
+        return STATE_MAP[s]
+    
+    # Try numeric code
+    if s.isdigit():
+        code = STATE_MAP.get(s.zfill(2))
+        if code:
+            return code
+    
+    return None
 
 
 # =====================================================
@@ -96,51 +113,64 @@ def gst_state(x: Optional[str]) -> Optional[str]:
 # =====================================================
 
 class AutoMergeParser:
-    """Parse Meesho, Amazon, and other files into single merged_rows list."""
+    """Parse Meesho, Amazon files into single merged_rows list."""
     
     MEESHO_ETIN = "07AARCM9332R1CQ"
     AMAZON_ETIN = "07AAICA3918J1CV"
+    ALLOWED_SUPPLIERS = {MEESHO_ETIN, AMAZON_ETIN}
 
     def parse_files(self, files: List[str]) -> Optional[Dict[str, Any]]:
-        """Parse multiple files and return merged_rows."""
+        """
+        Parse multiple files and return merged_rows.
+        
+        Only processes Meesho and Amazon files.
+        Automatically deduplicates and removes zero-value rows.
+        
+        Args:
+            files: List of file paths
+        
+        Returns:
+            {"merged_rows": [...]} or None if no data
+        """
         merged_rows = []
         
         # Parse each file
         for f in files:
-            name = Path(f).name.lower()
+            fname = Path(f).name.lower()
             
-            # Try Meesho
-            if "meesho" in name or "tcs_sales" in name or "tax_invoice" in name:
+            # Meesho files
+            if "meesho" in fname or "tcs_sales" in fname or "tax_invoice" in fname:
                 rows = self._parse_meesho(f)
                 if rows:
                     merged_rows.extend(rows)
-                    logging.info(f"Meesho: {len(rows)} rows from {Path(f).name}")
+                    logging.info(f"✓ Meesho: {len(rows)} rows from {Path(f).name}")
             
-            # Try Amazon
-            elif "amazon" in name or "mtr" in name or "settlement" in name:
+            # Amazon files
+            elif "amazon" in fname or "mtr" in fname or "mtb" in fname or "settlement" in fname:
                 rows = self._parse_amazon(f)
                 if rows:
                     merged_rows.extend(rows)
-                    logging.info(f"Amazon: {len(rows)} rows from {Path(f).name}")
+                    logging.info(f"✓ Amazon: {len(rows)} rows from {Path(f).name}")
         
         if not merged_rows:
-            logging.info("No data parsed from any files")
+            logging.warning("⚠ No data parsed from any files")
             return None
         
         # Deduplicate
         df = pd.DataFrame(merged_rows)
-        dup_cols = ["invoice_no", "pos", "txval", "igst_amt", "cgst_amt", "sgst_amt", "txn_type", "supplier_etin"]
-        df = df.drop_duplicates(subset=dup_cols).reset_index(drop=True)
+        dup_cols = ["invoice_no", "pos", "txval", "supplier_etin"]
+        df = df.drop_duplicates(subset=dup_cols, keep="first").reset_index(drop=True)
         
         merged_rows = df.to_dict("records")
         
-        logging.info(f"Total merged rows: {len(merged_rows)}")
+        logging.info(f"✓ Total merged rows (after dedup): {len(merged_rows)}")
         
         return {"merged_rows": merged_rows}
 
     def _parse_meesho(self, f: str) -> Optional[List[Dict[str, Any]]]:
-        """Parse Meesho file."""
+        """Parse Meesho sales or returns file."""
         try:
+            # Read file
             if f.endswith((".xlsx", ".xls")):
                 df = pd.read_excel(f, sheet_name=0)
             else:
@@ -150,17 +180,22 @@ class AutoMergeParser:
                     df = pd.read_csv(f, encoding="latin1")
             
             if df.empty:
+                logging.warning(f"⚠ Empty Meesho file: {Path(f).name}")
                 return None
             
+            # Column mapping (case-insensitive)
             cols = {str(c).strip().lower(): c for c in df.columns}
+            
             inv_col = cols.get("sub_order_num", cols.get("order_id"))
             state_col = cols.get("end_customer_state_new", cols.get("state"))
             value_col = cols.get("total_taxable_sale_value", cols.get("taxable_value"))
             tax_col = cols.get("tax_amount", cols.get("tax"))
             
             if not (inv_col and state_col and value_col):
+                logging.warning(f"⚠ Missing required columns in Meesho file: {Path(f).name}")
                 return None
             
+            # Determine if return/credit
             is_return = "return" in f.lower() or "credit" in f.lower()
             out = []
             
@@ -172,43 +207,54 @@ class AutoMergeParser:
                 val = safe(row.get(value_col))
                 tax_amt = safe(row.get(tax_col)) if tax_col else val * 0.03
                 
-                # Seller state 07 (Delhi) for Meesho
-                if pos == "07":
-                    ig, cg, sg = 0.0, round(tax_amt / 2, 2), round(tax_amt / 2, 2)
-                else:
-                    ig, cg, sg = round(tax_amt, 2), 0.0, 0.0
-                
-                if abs(val) < 0.01 and abs(ig) + abs(cg) + abs(sg) < 0.01:
+                # Skip zero rows
+                if val < 0.01 and tax_amt < 0.01:
                     continue
+                
+                # Meesho seller state = Delhi (07)
+                # Intra-state: split tax 50% CGST, 50% SGST
+                # Inter-state: tax as IGST
+                if pos == "07":
+                    igst = 0.0
+                    cgst = round(tax_amt / 2, 2)
+                    sgst = round(tax_amt / 2, 2)
+                else:
+                    igst = round(tax_amt, 2)
+                    cgst = 0.0
+                    sgst = 0.0
                 
                 out.append({
                     "invoice_no": str(row.get(inv_col, i)).strip(),
                     "pos": str(pos).zfill(2),
-                    "txval": round(abs(val), 2),
-                    "igst_amt": round(abs(ig), 2),
-                    "cgst_amt": round(abs(cg), 2),
-                    "sgst_amt": round(abs(sg), 2),
+                    "txval": round(val, 2),
+                    "igst_amt": igst,
+                    "cgst_amt": cgst,
+                    "sgst_amt": sgst,
                     "txn_type": "return" if is_return else "sale",
                     "supplier_etin": self.MEESHO_ETIN,
                     "supplier_name": "Meesho"
                 })
             
             return out if out else None
+        
         except Exception as e:
-            logging.error(f"Meesho parse error: {e}")
+            logging.error(f"✗ Meesho parse error in {Path(f).name}: {e}")
             return None
 
     def _parse_amazon(self, f: str) -> Optional[List[Dict[str, Any]]]:
-        """Parse Amazon/MTR file."""
+        """Parse Amazon/MTR/MTB file."""
         try:
+            # Read CSV
             try:
                 df = pd.read_csv(f, encoding="utf-8")
             except:
                 df = pd.read_csv(f, encoding="latin1")
             
             if df.empty:
+                logging.warning(f"⚠ Empty Amazon file: {Path(f).name}")
                 return None
             
+            # Column mapping (case-insensitive)
             cols = {str(c).strip().lower(): c for c in df.columns}
             
             state_col = cols.get("ship_to_state", cols.get("destination_state"))
@@ -217,46 +263,61 @@ class AutoMergeParser:
             cgst_col = cols.get("cgst_tax", cols.get("cgst"))
             sgst_col = cols.get("sgst_tax", cols.get("sgst"))
             inv_col = cols.get("invoice_number", cols.get("document_no"))
+            txn_col = cols.get("transaction_type", cols.get("type", cols.get("document_type")))
             
             if not (state_col and value_col):
+                logging.warning(f"⚠ Missing required columns in Amazon file: {Path(f).name}")
                 return None
             
             out = []
             
             for i, row in df.iterrows():
+                # Get state and POS
                 pos = gst_state(row.get(state_col))
                 if not pos:
                     continue
                 
+                # Get transaction value
                 val = safe(row.get(value_col))
-                ig = safe(row.get(igst_col)) if igst_col else 0.0
-                cg = safe(row.get(cgst_col)) if cgst_col else 0.0
-                sg = safe(row.get(sgst_col)) if sgst_col else 0.0
                 
+                # Get tax amounts
+                igst = safe(row.get(igst_col)) if igst_col else 0.0
+                cgst = safe(row.get(cgst_col)) if cgst_col else 0.0
+                sgst = safe(row.get(sgst_col)) if sgst_col else 0.0
+                
+                # Add UT tax if present
                 utgst_col = cols.get("utgst_tax", cols.get("utgst", cols.get("ut_tax")))
                 if utgst_col:
-                    sg += safe(row.get(utgst_col))
+                    sgst += safe(row.get(utgst_col))
                 
-                txn_col = cols.get("transaction_type", cols.get("type", cols.get("document_type")))
-                txn_type_val = str(row.get(txn_col, "shipment")).strip().lower() if txn_col else "shipment"
-                is_return = txn_type_val in ["refund", "cancel", "cancelled", "return", "reversal"] or val < 0
+                # Detect returns/cancellations
+                txn_type_val = "shipment"
+                if txn_col:
+                    txn_type_val = str(row.get(txn_col, "shipment")).strip().lower()
                 
-                if abs(val) < 0.01 and abs(ig) + abs(cg) + abs(sg) < 0.01:
+                is_return = (
+                    txn_type_val in ["refund", "cancel", "cancelled", "return", "reversal"]
+                    or val < 0
+                )
+                
+                # Skip zero rows
+                if val < 0.01 and (igst + cgst + sgst) < 0.01:
                     continue
                 
                 out.append({
                     "invoice_no": str(row.get(inv_col, i)).strip() if inv_col else str(i),
                     "pos": str(pos).zfill(2),
                     "txval": round(abs(val), 2),
-                    "igst_amt": round(abs(ig), 2),
-                    "cgst_amt": round(abs(cg), 2),
-                    "sgst_amt": round(abs(sg), 2),
+                    "igst_amt": round(igst, 2),
+                    "cgst_amt": round(cgst, 2),
+                    "sgst_amt": round(sgst, 2),
                     "txn_type": "return" if is_return else "sale",
                     "supplier_etin": self.AMAZON_ETIN,
                     "supplier_name": "Amazon"
                 })
             
             return out if out else None
+        
         except Exception as e:
-            logging.error(f"Amazon parse error: {e}")
+            logging.error(f"✗ Amazon parse error in {Path(f).name}: {e}")
             return None
